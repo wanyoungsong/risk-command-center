@@ -1,4 +1,3 @@
-%%writefile app_master_pro_015.py
 import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
