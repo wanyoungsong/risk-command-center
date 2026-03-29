@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+
 import numpy as np
 import plotly.graph_objects as go
 from pyvis.network import Network
@@ -7,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 import pandas as pd
 from scipy.stats import norm
+
 import google.generativeai as genai
 from neo4j import GraphDatabase
 import os
@@ -256,7 +258,7 @@ def get_knowledge_graph_context(risk_driver):
     Neo4j에 접속하여 수학 엔진이 감지한 리스크 팩터가 유발하는 인과관계와 사내 규정을 가져옴.
     """
     kg_context = ""
-    
+
     # DB 접속 정보가 없으면 즉시 Fallback 컨텍스트 반환
     if not NEO4J_URI or not NEO4J_PASSWORD:
         return _fallback_kg_context(risk_driver)
@@ -270,19 +272,19 @@ def get_knowledge_graph_context(risk_driver):
                 MATCH (rf:RiskFactor)-[:TRIGGERS_POLICY]->(rule:ComplianceRule)
                 MATCH (a:AssetClass)-[exp:EXPOSED_TO]->(rf)
                 WHERE rf.name CONTAINS $keyword OR rf.desc CONTAINS $keyword
-                RETURN a.name AS asset, exp.greek AS greek, exp.logic AS logic, 
+                RETURN a.name AS asset, exp.greek AS greek, exp.logic AS logic,
                        rule.name AS rule_name, rule.code AS rule_code,
                        rule.action_plan AS action_plan
                 """
                 # 변동성, 금리 등 키워드 매칭 로직 (엔진 변수명 -> 온톨로지 키워드)
                 kw = "Volatility" if "Vol" in risk_driver else "Intensity" if "Intensity" in risk_driver else "Interest_Rate"
                 result = session.run(query, keyword=kw)
-                
+
                 # 쿼리 결과를 LLM이 읽기 좋은 텍스트로 변환
                 records = list(result)
                 if not records:
                     return _fallback_kg_context(risk_driver) # 쿼리 결과 없을 시 Fallback
-                    
+
                 for record in records:
                     kg_context += f"##### 🕸️ 데이터 리니지 인과관계\n"
                     kg_context += f"- **대상 자산군**: {record['asset']}\n"
@@ -291,12 +293,12 @@ def get_knowledge_graph_context(risk_driver):
                     kg_context += f"##### 🚨 적용 사내 규정 및 대응 지침\n"
                     kg_context += f"- **규정명/코드**: {record['rule_name']} ({record['rule_code']})\n"
                     kg_context += f"- **대응 조치 권고(Action Plan)**: {record['action_plan']}\n\n"
-                    
+
     except Exception as e:
         # [안전망] DB 연결 실패 시 Fallback 컨텍스트 반환 (시연 폭망 방지)
         kg_context = f"⚠️ Neo4j DB 연결 실패 (Error: {str(e)[:50]}...). 사내 규정 온톨로지 정보를 불러오지 못했습니다.\n\n"
         kg_context += _fallback_kg_context(risk_driver)
-        
+
     return kg_context
 
 def _fallback_kg_context(risk_driver):
@@ -326,11 +328,11 @@ def _fallback_kg_context(risk_driver):
 
 def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
     """
-    수학 엔진의 정량적 결과와 지식그래프의 온톨로지 지식을 결합하여 
+    수학 엔진의 정량적 결과와 지식그래프의 온톨로지 지식을 결합하여
     gemini-2.5-flash 모델에게 경영진 브리핑 스트리밍 출력을 요청하는 제너레이터 함수
     """
     model = genai.GenerativeModel('gemini-2.5-flash')
-    
+
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
     아래 [정량적 데이터]와 사내 지식그래프(Neo4j)에서 추출한 [온톨로지 규정 및 논리]를 바탕으로
@@ -348,7 +350,159 @@ def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_con
 
     [작성 가이드 (필독)]
     1. 불필요한 인사말("안녕하세요" 등) 없이 바로 핵심 브리핑을 시작할 것.
-    2. 수학 엔진의 숫자 팩트와 지식그래프의 온톨로지 논리(Greeks, Logic)를 완벽하게 엮어서 인과관계를 설명할 것. 
+    2. 수학 엔진의 숫자 팩트와 지식그래프의 온톨로지 논리(Greeks, Logic)를 완벽하게 엮어서 인과관계를 설명할 것.
+    3. 반드시 지식그래프에서 추출된 사내 규정(Article 등)과 구체적인 대응 액션 플랜(Action Plan)을 근거로 제시하며 권고할 것. 환각(Hallucination) 제로를 달성하라.
+    4. 마크다운의 볼드체(**)와 글머리 기호(-)를 적절히 사용하여 경영진이 한눈에 파악할 수 있도록 3문단 이내로 가독성 높게 작성해.
+    """
+
+    try:
+        # 스트리밍 활성화
+        response = model.generate_content(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+                time.sleep(0.01) # 스트리밍 시각적 효과를 위한 미세 딜레이
+    except Exception as e:
+        # [안전망] API 에러 시 시연 에러 방지용 메시지
+        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다. (API 키 및 네트워크 확인 필요)\n\nError: {e}"
+
+# --- 4. 엔진 모듈 (계속) ---
+# [신규] GraphRAG 실행 모듈 2 (Neo4j 지식 추출 및 Gemini 프롬프트 전송)
+
+@st.cache_data(ttl=3600) # 1시간마다 갱신 (DB 부하 방지)
+def get_dynamic_risk_limits():
+    """Neo4j 지식 그래프에서 부서별 최신 한도 금액을 동적으로 조회합니다."""
+    # DB 연결 실패 시 사용할 기본 Fallback (기존 하드코딩 값)
+    limits = {
+        "전사 VaR 한도": 1500.0, 
+        "금리 민감도(Rho) 한도": 40.0, 
+        "변동성 민감도(Vega) 한도": 30.0
+    }
+    
+    if not NEO4J_URI or not NEO4J_PASSWORD:
+        return limits
+        
+    try:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
+            with driver.session() as session:
+                # RiskLimit 노드에서 이름과 한도값을 가져오는 쿼리
+                query = "MATCH (l:RiskLimit) RETURN l.name AS name, l.limit_value AS val"
+                result = session.run(query)
+                for record in result:
+                    limits[record["name"]] = float(record["val"])
+    except Exception:
+        pass # 에러 시 Fallback 값 유지
+        
+    return limits
+
+def get_compliance_graph_context(dept_code, usage_pct):
+    """
+    Neo4j에 접속하여 부서별 한도 소진율에 따른 사내 컴플라이언스 규정 및 액션 플랜을 가져옴.
+    """
+    kg_context = ""
+    
+    # DB 접속 정보가 없으면 즉시 Fallback 컨텍스트 반환
+    if not NEO4J_URI or not NEO4J_PASSWORD:
+        return _fallback_compliance_context(dept_code, usage_pct)
+
+    try:
+        with GraphDatabase.driver(URI, auth=AUTH) as driver:
+            with driver.session() as session:
+                # 부서 코드와 한도 소진율 조건(Threshold)을 매핑하는 Cypher
+                query = """
+                MATCH (d:Department {code: $dept_code})-[:MONITORS]->(l:RiskLimit)-[tp:TRIGGERS_POLICY]->(rule:ComplianceRule)
+                WHERE tp.threshold CONTAINS $threshold_kw
+                RETURN l.name AS limit_name, l.metric AS metric, 
+                       tp.threshold AS threshold, tp.action_plan AS action_plan,
+                       rule.name AS rule_name, rule.code AS rule_code
+                """
+                # 소진율에 따른 키워드 매칭 로직
+                th_kw = "100% 이상" if usage_pct >= 100 else "90% 이상" if usage_pct >= 90 else "정상"
+                
+                # 정상 상태일 때는 쿼리를 보내지 않고 조기 반환 (비용 절감)
+                if th_kw == "정상": return "✅ 현재 한도 소진율은 정상 범위 내에 있으며, 추가적인 AI 처방이 필요하지 않습니다."
+
+                result = session.run(query, dept_code=dept_code, threshold_kw=th_kw)
+                
+                records = list(result)
+                if not records: return _fallback_compliance_context(dept_code, usage_pct)
+                    
+                for record in records:
+                    kg_context += f"##### 🚨 적용 사내 컴플라이언스 규정\n"
+                    kg_context += f"- **규정명/코드**: {record['rule_name']} ({record['rule_code']})\n"
+                    kg_context += f"- **위반 조건(Threshold)**: {record['threshold']}\n\n"
+                    kg_context += f"##### 📝 AI 조치 처방 (Action Plan)\n"
+                    kg_context += f"- **{record['metric']} 한도**: {record['action_plan']}\n"
+                    
+    except Exception as e:
+        # [안전망] DB 연결 실패 시 Fallback 컨텍스트 반환
+        kg_context = f"⚠️ Neo4j DB 연결 실패 (Error: {str(e)[:50]}...). 사내 규정 온톨로지 정보를 불러오지 못했습니다.\n\n"
+        kg_context += _fallback_compliance_context(dept_code, usage_pct)
+        
+    return kg_context
+
+def _fallback_compliance_context(dept_code, usage_pct):
+    """
+    Neo4j 연결 실패 시 시연을 위해 반환하는 하드코딩된 온톨로지 컨텍스트
+    """
+    if usage_pct < 90: return "✅ 현재 한도 소진율은 정상 범위 내에 있으며, 추가적인 AI 처방이 필요하지 않습니다."
+
+    if dept_code == 'ENTERPRISE':
+        if usage_pct >= 100:
+            return """
+            ##### 🚨 적용 사내 컴플라이언스 규정
+            - **규정명/코드**: 전사 한도 초과(Breach) 대응 (Article 12-2)
+            ##### 📝 AI 조치 처방 (Action Plan)
+            - **전사 VaR 한도**: 즉각적인 포지션 축소, CRO 대면 보고 및 위기상황 위원회 소집
+            """
+        else: # 90~100%
+            return """
+            ##### 🚨 적용 사내 컴플라이언스 규정
+            - **규정명/코드**: 전사 한도 경고(Warning) 대응 (Article 12-1)
+            ##### 📝 AI 조치 처방 (Action Plan)
+            - **전사 VaR 한도**: 신규 리스크 테이킹 즉각 중지 및 포지션 동결
+            """
+    elif dept_code == 'BOND_DESK' and usage_pct >= 100:
+        return """
+        ##### 🚨 적용 사내 컴플라이언스 규정
+        - **규정명/코드**: 채권 데스크 한도 초과 대응 (Article 75-2)
+        ##### 📝 AI 조치 처방 (Action Plan)
+        - **금리 민감도(Rho) 한도**: IRS 페이(Pay) 포지션 신규 구축 또는 장기채 즉시 매도하여 Rho 한도 이내로 축소
+        """
+    elif dept_code == 'ELS_DESK' and usage_pct >= 100:
+        return """
+        ##### 🚨 적용 사내 컴플라이언스 규정
+        - **규정명/코드**: ELS 데스크 비선형 한도 초과 대응 (Article 14-1)
+        ##### 📝 AI 조치 처방 (Action Plan)
+        - **변동성 민감도(Vega) 한도**: 사내 규정 제14조에 의거, 신규 ELS 롤오버 중지 및 베가(Vega) 중립을 위한 헤지 비중 기계적 확대
+        """
+    return "✅ 현재 한도 소진율은 정상 범위 내에 있으며, 추가적인 AI 처방이 필요하지 않습니다."
+
+def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limit_amt, kg_context):
+    """
+    수학 엔진의 한도 소진 결과와 지식그래프의 컴플라이언스 지식을 결합하여 
+    gemini-2.5-flash 모델에게 AI 처방전 스트리밍 출력을 요청하는 제너레이터 함수
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    prompt = f"""
+    너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
+    아래 [정량적 한도 현황]과 사내 지식그래프(Neo4j)에서 추출한 [온톨로지 규정 및 조치 지침]을 바탕으로
+    해당 부서를 위한 AI 조치 처방전(AI Prescription)을 작성해.
+
+    [정량적 한도 현황 (수학 엔진 산출 팩트)]
+    - 대상 부서: {dept_name}
+    - 핵심 리스크 지표: {metric_name}
+    - 현재 노출도: {exposure_amt:,.1f}억 원
+    - 사내 컴플라이언스 한도: {limit_amt:,.1f}억 원
+    - **한도 소진율: {usage_pct:.1f}% 도달**
+
+    [온톨로지 규정 및 지침 (지식그래프 기반 데이터 리니지)]
+    {kg_context}
+
+    [작성 가이드 (필독)]
+    1. 불필요한 인사말("안녕하세요" 등) 없이 바로 핵심 브리핑을 시작할 것.
+    2. 수학 엔진의 숫자 팩트와 지식그래프의 온톨로지 논리(threshold, Logic)를 완벽하게 엮어서 인과관계를 설명할 것. 
     3. 반드시 지식그래프에서 추출된 사내 규정(Article 등)과 구체적인 대응 액션 플랜(Action Plan)을 근거로 제시하며 권고할 것. 환각(Hallucination) 제로를 달성하라.
     4. 마크다운의 볼드체(**)와 글머리 기호(-)를 적절히 사용하여 경영진이 한눈에 파악할 수 있도록 3문단 이내로 가독성 높게 작성해.
     """
@@ -518,7 +672,7 @@ if main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-1. 전사 
     st.markdown("---")
     st.markdown("#### 📝 AI 참모 원인 규명 및 대응 권고 리포트 (GraphRAG 기반)")
     st.caption("수학 엔진의 정량적 연산 결과(Fact)와 사내 지식 그래프(Neo4j Aura)의 온톨로지 지식(사내 규정 및 인과관계)을 결합하여 gemini-2.5-flash 모델이 실시간으로 경영진 보고서를 작성합니다.")
-    
+
     # UI 레이아웃 분리 (리포트 텍스트 vs 리니지 맵)
     col_b1, col_b2 = st.columns([1.5, 1.5])
 
@@ -528,19 +682,19 @@ if main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-1. 전사 
             with st.spinner("지식 그래프 쿼리 및 AI 참모 추론 중..."):
                 # 1. Neo4j 지식 그래프에서 사내 규정 컨텍스트 조회
                 kg_context = get_knowledge_graph_context(top_risk_driver)
-                
+
                 # 2. UI 컨테이너 스타일링 (경고 느낌의 박스)
                 with st.container(border=True):
                     st.markdown(f"**[Warning] 전사 리스크 한도 소진율 {var_usage_pct:.1f}% 도달**", help="사내 리스크 관리 규정에 의거하여 경영진 즉시 보고가 필요한 단계입니다.")
-                    
+
                     # 3. Streamlit Native 스트리밍 함수를 통해 Gemini 답변 타이핑 효과 연출
                     st.write_stream(
                         stream_ai_briefing(
-                            daily_total_pnl, 
-                            daily_els_pnl, 
-                            daily_bond_pnl, 
-                            top_risk_driver, 
-                            var_usage_pct, 
+                            daily_total_pnl,
+                            daily_els_pnl,
+                            daily_bond_pnl,
+                            top_risk_driver,
+                            var_usage_pct,
                             kg_context
                         )
                     )
@@ -572,7 +726,7 @@ if main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-1. 전사 
         # 4. 엣지 연결 및 라벨링 (온톨로지 기반)
         net_rca.add_edge("Macro_Driver", "Port_Bond", label="금리/Rho 상승", arrows="to", color="#cccccc")
         net_rca.add_edge("Macro_Driver", "Port_ELS", label="변동성/Vega 폭등", arrows="to", color="#cccccc")
-        
+
         # 손실 규모에 따라 엣지 굵기 조절 (가독성 증대)
         net_rca.add_edge("Port_Bond", "PnL", arrows="to", color="#ff9999", width=abs(daily_bond_pnl/daily_total_pnl)*5 if daily_total_pnl !=0 else 1)
         net_rca.add_edge("Port_ELS", "PnL", label="주요 원인", arrows="to", color="#ff9999", width=abs(daily_els_pnl/daily_total_pnl)*10 if daily_total_pnl !=0 else 2)
@@ -586,21 +740,29 @@ if main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-1. 전사 
 # [페이지 1-2] 부서별 한도 관리 및 처방
 # ==========================================
 elif main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-2. 부서별 한도 관리 및 처방":
+    # --- [추가] Neo4j에서 동적 한도 불러오기 ---
+    dynamic_limits = get_dynamic_risk_limits()
+
     st.subheader("🚨 부서별 리스크 한도(Limits) 실시간 모니터링")
     st.caption("프라이싱 엔진에서 산출된 실시간 그릭스(Greeks) 및 VaR를 사내 컴플라이언스 한도와 대조합니다.")
     st.markdown("---")
 
+    # --- 1. Top Tier: 실시간 한도 모니터링 표 ---
+    st.markdown("##### 1. 실시간 한도 모니터링 (Top Tier)")
     col_t1, col_t2, col_t3 = st.columns(3)
 
     # 앞서 계산한 엔진 결과값을 그대로 활용합니다!
     # var_usage_pct (전사 VaR 소진율), daily_bond_pnl (채권 P&L), daily_els_pnl (ELS P&L), var_sens (그릭스)
-
+    # var_amount (전사 VaR 총액), rho_exposure (채권 Rho 총액), vega_exposure (ELS Vega 총액)
+    
     with col_t1:
         st.markdown("##### 🏢 전사 통합 한도")
         with st.container(border=True):
-            st.markdown("**Parametric VaR 한도 (99%, 1D)**: 1,500억")
-
-            # 한도 소진율에 따른 동적 프로그레스 바 색상 및 경고 문구
+            # 하드코딩 대신 동적 변수 사용
+            var_limit_bn = dynamic_limits.get("전사 VaR 한도", 1500.0)
+            st.markdown(f"**Parametric VaR 한도 (99%, 1D)**: {var_limit_bn:,.0f}억")
+            # st.markdown("**Parametric VaR 한도 (99%, 1D)**: 1,500억")
+            
             if var_usage_pct >= 100:
                 st.progress(1.0, text=f"🚨 {var_usage_pct:.1f}% (한도 초과)")
                 st.error("Action: 즉각적인 포지션 축소 및 위기상황 보고 요망")
@@ -614,37 +776,131 @@ elif main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-2. 부�
     with col_t2:
         st.markdown("##### 📈 채권 운용 데스크")
         with st.container(border=True):
-            # 채권 데스크의 핵심은 금리 민감도(Rho) 한도
-            rho_exposure = var_sens.filter(like='KTB').sum() / 100000000 # 억 원
-            rho_limit = 40.0 # 가상의 한도 (40억)
-            rho_usage = abs(rho_exposure / rho_limit) * 100
-
-            st.markdown("**Rho (금리 민감도) 한도**: 40억 / 1bp")
+            rho_exposure_bn = rho_exposure / 100000000 # 억 원
+            # rho_limit_bn = 40.0 # 억 원
+            rho_limit_bn = dynamic_limits.get("금리 민감도(Rho) 한도", 40.0)
+            rho_usage = abs(rho_exposure_bn / rho_limit_bn) * 100
+            
+            # st.markdown("**Rho (금리 민감도) 한도**: 40억 / 1bp")
+            st.markdown(f"**Rho (금리 민감도) 한도**: {rho_limit_bn:,.0f}억 / 1bp")
             if rho_usage >= 100:
                 st.progress(1.0, text=f"🚨 {rho_usage:.1f}% (한도 초과)")
             else:
-                st.progress(min(rho_usage / 100.0, 1.0), text=f"⚠️ {rho_usage:.1f}% (주의)")
-
-            st.markdown(f"**현재 누적 P&L**: {daily_bond_pnl / 100000000:,.1f}억 원")
+                st.progress(min(rho_usage / 100.0, 1.0), text=f"✅ {rho_usage:.1f}% (정상)")
+                st.success("Action: 특이사항 없음")
 
     with col_t3:
         st.markdown("##### 📉 ELS 운용 데스크 (자체 헤지북)")
         with st.container(border=True):
-            # ELS 데스크의 핵심은 변동성 민감도(Vega) 한도
-            vega_exposure = var_sens.filter(like='Vol').sum() / 100000000 # 억 원
-            vega_limit = 30.0 # 가상의 한도 (30억)
-            vega_usage = abs(vega_exposure / vega_limit) * 100
+            vega_exposure_bn = vega_exposure / 100000000 # 억 원
+            # vega_limit_bn = 30.0 # 억 원
+            vega_limit_bn = dynamic_limits.get("변동성 민감도(Vega) 한도", 30.0)
+            vega_usage = abs(vega_exposure_bn / vega_limit_bn) * 100
 
-            st.markdown("**Vega (변동성 민감도) 한도**: 30억 / 1%p")
+            # st.markdown("**Vega (변동성 민감도) 한도**: 30억 / 1%p")
+            st.markdown(f"**Vega (변동성 민감도) 한도**: {vega_limit_bn:,.0f}억 / 1%p")
             if vega_usage >= 100:
                 st.progress(1.0, text=f"🚨 {vega_usage:.1f}% (한도 초과)")
             else:
-                st.progress(min(vega_usage / 100.0, 1.0), text=f"❌ {vega_usage:.1f}% (초과 임박)")
-
-            st.markdown(f"**현재 Net P&L (헤지비용 포함)**: {daily_els_pnl / 100000000:,.1f}억 원")
-
+                st.progress(min(vega_usage / 100.0, 1.0), text=f"⚠️ {vega_usage:.1f}% (초과 임박)")
+                
+            st.warning("Action: 비선형 리스크 확대 구간 진입")
+            
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.info("💡 **시스템 알림**: 한도 모니터링은 장중 실시간 매매 데이터 및 기초자산 가격을 반영하여 1시간 주기로 갱신됩니다. 현재 전사 VaR 한도가 사내 리스크 관리 규정(제12조)의 임계치를 상회하고 있습니다.")
     st.markdown("---")
-    st.info("💡 **시스템 알림**: 한도 모니터링은 장중 실시간 매매 데이터 및 기초자산 가격을 반영하여 1시간 주기로 갱신됩니다. 현재 ELS 데스크의 Vega 한도와 전사 VaR 한도가 사내 리스크 관리 규정(제14조)의 임계치를 상회하고 있습니다.")
+    
+    # --- 2. Bottom Tier: AI 한도 처방 리포트 (GraphRAG 기반) ---
+    st.markdown("#### 📝 AI 참모 실시간 한도 처방 리포트 (GraphRAG 기반)")
+    st.caption("수학 엔진의 정량적 소진 결과(Fact)와 사내 지식 그래프(Neo4j Aura)의 온톨로지 지식(사내 규정 및 조치 지침)을 결합하여 gemini-2.5-flash 모델이 실시간으로 처방전을 작성합니다.")
+    
+    # UI 레이아웃 분리 (리포트 텍스트 vs 규정 맵)
+    col_r1, col_r2 = st.columns([1.5, 1.5])
+
+    # [중요] 사용자가 처방전을 생성할 부서를 선택합니다. (소진율이 높은 부서를 기본값으로 세팅)
+    with col_r1:
+        st.markdown("##### 1. 부서별 AI 처방전")
+        with st.container(border=True):
+            selected_dept = st.selectbox("처방전을 생성할 부서를 선택하십시오.", ["전사 통합 리스크 위 위원회", "채권 운용 데스크", "ELS 운용 데스크"], index=0)
+            
+            # 선택된 부서에 맞는 데이터 매핑
+            if selected_dept == "전사 통합 리스크 위 위원회":
+                dept_code, dept_name, usage_pct, metric_name, exposure_amt, limit_amt = 'ENTERPRISE', selected_dept, var_usage_pct, '전사 VaR 한도', var_amount / 100000000, 1500.0
+            elif selected_dept == "채권 운용 데스크":
+                dept_code, dept_name, usage_pct, metric_name, exposure_amt, limit_amt = 'BOND_DESK', selected_dept, rho_usage, '금리 민감도(Rho) 한도', rho_exposure_bn, rho_limit_bn
+            else: # ELS 운용 데스크
+                dept_code, dept_name, usage_pct, metric_name, exposure_amt, limit_amt = 'ELS_DESK', selected_dept, vega_usage, '변동성 민감도(Vega) 한도', vega_exposure_bn, vega_limit_bn
+            
+            # AI 처방 생성 버튼
+            if st.button(f"✨ {dept_name} AI 한도 처방 생성", type="primary", use_container_width=True):
+                with st.spinner(f"{dept_name} 지식 그래프 쿼리 및 AI 참모 추론 중..."):
+                    # 1. Neo4j 지식 그래프에서 사내 규정 컨텍스트 조회
+                    kg_context = get_compliance_graph_context(dept_code, usage_pct)
+                    
+                    # 2. UI 컨테이너 스타일링
+                    with st.container(border=True):
+                        st.markdown(f"**🤖 AI 참모의 {dept_name} 처방전**")
+                        
+                        # 3. Streamlit Native 스트리밍 함수를 통해 Gemini 답변 타이핑 효과 연출
+                        st.write_stream(
+                            stream_ai_prescription(
+                                dept_name, 
+                                usage_pct, 
+                                metric_name, 
+                                exposure_amt, 
+                                limit_amt, 
+                                kg_context
+                            )
+                        )
+            else:
+                # 버튼을 누르기 전 대기 화면
+                st.info(f"👆 위 셀렉트박스에서 부서를 선택한 후 버튼을 클릭하면 AI 참모가 실시간으로 {dept_name}을 위한 처방전을 작성합니다.")
+
+    with col_r2:
+        st.markdown("#### 🕸️ 컴플라이언스 데이터 리니지 (Knowledge Graph)")
+        st.caption("수학적 팩트 기반 데이터 리니지 (부서 ➡ 한도 지표 ➡ 적용 규정 ➡ 액션 플랜)")
+
+        # [신규] 더미 데이터가 아닌 실제 엔진/온톨로지 데이터를 기반으로 노드/엣지 생성
+        net_cmp = Network(height='400px', width='100%', bgcolor='#ffffff', font_color='black')
+
+        # 1. 부서 노드 (Scaled P&L 동적 반영)
+        net_cmp.add_node("Dept_Total", label="전사 리스크\n위원회", color="#cce5ff", size=25, shape="database")
+        net_cmp.add_node("Dept_Bond", label="채권 운용\n데스크", color="#cce5ff", size=20, shape="database")
+        net_cmp.add_node("Dept_ELS", label="ELS 운용\n데스크", color="#cce5ff", size=20, shape="database")
+
+        # 2. 한도 노드
+        net_cmp.add_node("Limit_Var", label="전사 VaR 한도", color="#ffb3b3", size=25, shape="dot")
+        net_cmp.add_node("Limit_Rho", label="Rho 한도", color="#ffb3b3", size=20, shape="dot")
+        net_cmp.add_node("Limit_Vega", label="Vega 한도", color="#ffb3b3", size=20, shape="dot")
+        
+        # 3. 규정 노드
+        net_cmp.add_node("Rule_Var_Breach", label="한도 초과(Article 12-2)", color="#ff9999", size=30, shape="star")
+        net_cmp.add_node("Rule_Rho_Breach", label="데스크 초과(Article 75-2)", color="#ff9999", size=25, shape="star")
+        net_cmp.add_node("Rule_Vega_Breach", label="비선형 초과(Article 14-1)", color="#ff9999", size=25, shape="star")
+
+        # 4. 엣지 연결 (온톨로지 기반)
+        net_cmp.add_edge("Dept_Total", "Limit_Var", label="모니터링", arrows="to", color="#cccccc")
+        net_cmp.add_edge("Dept_Bond", "Limit_Rho", label="모니터링", arrows="to", color="#cccccc")
+        net_cmp.add_edge("Dept_ELS", "Limit_Vega", label="모니터링", arrows="to", color="#cccccc")
+        
+        # 한도 소진 상황에 따라 엣지 굵기 및 색상 조절 (가독성 증대)
+        if var_usage_pct >= 100:
+            net_cmp.add_edge("Limit_Var", "Rule_Var_Breach", label=f"{var_usage_pct:.1f}%", arrows="to", color="#ff0000", width=10)
+        elif var_usage_pct >= 90:
+            net_cmp.add_edge("Limit_Var", "Rule_Var_Breach", label=f"{var_usage_pct:.1f}%", arrows="to", color="#ffa500", width=5)
+        
+        if rho_usage >= 100:
+            net_cmp.add_edge("Limit_Rho", "Rule_Rho_Breach", label=f"{rho_usage:.1f}%", arrows="to", color="#ff0000", width=10)
+        
+        if vega_usage >= 100:
+            net_cmp.add_edge("Limit_Vega", "Rule_Vega_Breach", label=f"{vega_usage:.1f}%", arrows="to", color="#ff0000", width=10)
+
+        net_cmp.set_options('{"physics": {"solver": "forceAtlas2Based"}, "edges": {"font": {"size": 11, "color": "#555555"}}}')
+        net_cmp.write_html("kg_cmp.html")
+        with open("kg_cmp.html", 'r', encoding='utf-8') as f:
+            components.html(f.read(), height=420)
+
+
 
 # ==========================================
 # [페이지 2] 스트레스 테스트 데스크
