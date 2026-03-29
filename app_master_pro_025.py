@@ -327,9 +327,9 @@ def _fallback_kg_context(risk_driver):
 def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
     """
     수학 엔진의 정량적 결과와 지식그래프의 온톨로지 지식을 결합하여 
-    Gemini 1.5 Pro 모델에게 경영진 브리핑 스트리밍 출력을 요청하는 제너레이터 함수
+    gemini-2.5-flash 모델에게 경영진 브리핑 스트리밍 출력을 요청하는 제너레이터 함수
     """
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
@@ -517,14 +517,14 @@ if main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-1. 전사 
     # Bottom Tier: AI 지식 그래프 & 서술형 리포트
     st.markdown("---")
     st.markdown("#### 📝 AI 참모 원인 규명 및 대응 권고 리포트 (GraphRAG 기반)")
-    st.caption("수학 엔진의 정량적 연산 결과(Fact)와 사내 지식 그래프(Neo4j Aura)의 온톨로지 지식(사내 규정 및 인과관계)을 결합하여 Gemini 1.5 Pro 모델이 실시간으로 경영진 보고서를 작성합니다.")
+    st.caption("수학 엔진의 정량적 연산 결과(Fact)와 사내 지식 그래프(Neo4j Aura)의 온톨로지 지식(사내 규정 및 인과관계)을 결합하여 gemini-2.5-flash 모델이 실시간으로 경영진 보고서를 작성합니다.")
     
     # UI 레이아웃 분리 (리포트 텍스트 vs 리니지 맵)
     col_b1, col_b2 = st.columns([1.5, 1.5])
 
     with col_b1:
         # AI 브리핑 생성 버튼
-        if st.button("✨ 경영진 보고용 실시간 AI 브리핑 생성 (Gemini 1.5 Pro)", type="primary", use_container_width=True):
+        if st.button("✨ 경영진 보고용 실시간 AI 브리핑 생성 (gemini-2.5-flash)", type="primary", use_container_width=True):
             with st.spinner("지식 그래프 쿼리 및 AI 참모 추론 중..."):
                 # 1. Neo4j 지식 그래프에서 사내 규정 컨텍스트 조회
                 kg_context = get_knowledge_graph_context(top_risk_driver)
