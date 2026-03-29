@@ -7,6 +7,9 @@ import time
 from datetime import datetime, timedelta
 import pandas as pd
 from scipy.stats import norm
+import google.generativeai as genai
+from neo4j import GraphDatabase
+import os
 
 # --- 1. 세션 상태 관리 (페이지 이동 시 초기화 방지) ---
 if 'scenario_step' not in st.session_state:
