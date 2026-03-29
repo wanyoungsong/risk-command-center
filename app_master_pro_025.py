@@ -776,6 +776,7 @@ elif main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-2. 부�
     with col_t2:
         st.markdown("##### 📈 채권 운용 데스크")
         with st.container(border=True):
+            rho_exposure = var_sens.filter(like='KTB').sum()
             rho_exposure_bn = rho_exposure / 100000000 # 억 원
             # rho_limit_bn = 40.0 # 억 원
             rho_limit_bn = dynamic_limits.get("금리 민감도(Rho) 한도", 40.0)
@@ -788,10 +789,13 @@ elif main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-2. 부�
             else:
                 st.progress(min(rho_usage / 100.0, 1.0), text=f"✅ {rho_usage:.1f}% (정상)")
                 st.success("Action: 특이사항 없음")
+                
+            st.markdown(f"**현재 누적 P&L**: {daily_bond_pnl / 100000000:,.1f}억 원")
 
     with col_t3:
         st.markdown("##### 📉 ELS 운용 데스크 (자체 헤지북)")
         with st.container(border=True):
+            vega_exposure = var_sens.filter(like='Vol').sum()
             vega_exposure_bn = vega_exposure / 100000000 # 억 원
             # vega_limit_bn = 30.0 # 억 원
             vega_limit_bn = dynamic_limits.get("변동성 민감도(Vega) 한도", 30.0)
@@ -805,6 +809,7 @@ elif main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-2. 부�
                 st.progress(min(vega_usage / 100.0, 1.0), text=f"⚠️ {vega_usage:.1f}% (초과 임박)")
                 
             st.warning("Action: 비선형 리스크 확대 구간 진입")
+            st.markdown(f"**현재 Net P&L (헤지비용 포함)**: {daily_els_pnl / 100000000:,.1f}억 원")
             
     st.markdown("<br>", unsafe_allow_html=True)
     st.info("💡 **시스템 알림**: 한도 모니터링은 장중 실시간 매매 데이터 및 기초자산 가격을 반영하여 1시간 주기로 갱신됩니다. 현재 전사 VaR 한도가 사내 리스크 관리 규정(제12조)의 임계치를 상회하고 있습니다.")
