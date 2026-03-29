@@ -265,7 +265,8 @@ def get_knowledge_graph_context(risk_driver):
 
     try:
         # 실제 Neo4j 연결 및 쿼리 실행
-        with GraphDatabase.driver(URI, auth=AUTH) as driver:
+        # with GraphDatabase.driver(URI, auth=AUTH) as driver:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
             with driver.session() as session:
                 # 리스크 팩터 키워드 매칭 (Vol, Intensity 등)
                 query = """
@@ -406,7 +407,8 @@ def get_compliance_graph_context(dept_code, usage_pct):
         return _fallback_compliance_context(dept_code, usage_pct)
 
     try:
-        with GraphDatabase.driver(URI, auth=AUTH) as driver:
+        # with GraphDatabase.driver(URI, auth=AUTH) as driver:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
             with driver.session() as session:
                 # 부서 코드와 한도 소진율 조건(Threshold)을 매핑하는 Cypher
                 query = """
