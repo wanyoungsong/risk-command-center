@@ -5,3 +5,4 @@ plotly
 pyvis
 scipy
 neo4j
+google-generativeai
