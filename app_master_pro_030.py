@@ -1222,11 +1222,11 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             return mkt
 
         # =========================================================================
-        # 🚀 [1단계 핵심 수정] 진정한 경사하강법(Gradient Descent) 기반 역산 탐색
-        # 비선형 상품(ELS)의 편미분(Gradient)을 계산하여 손실이 가장 가파른 방향으로 궤적을 틉니다.
+        # 🚀 [1단계 핵심 수정] 진정한 경사하강법 + Macro Contagion Momentum
+        # ELS Worst-Of 로직으로 인한 Dead Gradient 방어 및 상관관계 주입
         # =========================================================================
-        target_pnl_raw = target_loss_input * 100000000  # 억 원 -> 원 단위 변환
-                
+        target_pnl_raw = target_loss_input * 100000000  
+        
         search_k = 100.0
         search_s = 100.0
         search_r = 0.0
@@ -1238,34 +1238,34 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             te = revalue_els_multi(df_els, tmkt, base_mkt_state)
             return tb['pnl'].sum() + te['pnl'].sum()
 
-        with st.spinner(f"비선형 리스크(ELS 배리어 등)를 고려한 최적 위기 경로를 탐색 중입니다..."):
-            # 탐색 궤적을 모두 저장할 리스트
+        with st.spinner(f"비선형 리스크(ELS 배리어)와 시장 상관관계를 고려한 위기 경로 탐색 중..."):
             path_k, path_s, path_r = [100.0], [100.0], [0.0]
             current_pnl = eval_pnl(search_k, search_s, search_r)
             
-            for _ in range(50): # 최대 50 스텝 전진
+            for _ in range(50):
                 if current_pnl <= target_pnl_raw:
                     break
                     
-                # --- 유한차분법(Finite Difference)으로 현재 좌표의 편미분(Gradient) 계산 ---
-                eps = 0.5 # 미세 충격량
+                # 1. 유한차분법으로 순수 편미분(Gradient) 계산
+                eps = 1.0 
                 pnl_k_shock = eval_pnl(search_k - eps, search_s, search_r)
                 pnl_s_shock = eval_pnl(search_k, search_s - eps, search_r)
                 pnl_r_shock = eval_pnl(search_k, search_s, search_r + eps)
                 
-                # 손실이 얼마나 가파르게 증가하는지(기울기) 산출 (양수일수록 위험함)
-                grad_k = max(0, current_pnl - pnl_k_shock)
-                grad_s = max(0, current_pnl - pnl_s_shock)
-                grad_r = max(0, current_pnl - pnl_r_shock)
+                grad_k_raw = max(0, current_pnl - pnl_k_shock)
+                grad_s_raw = max(0, current_pnl - pnl_s_shock)
+                grad_r_raw = max(0, current_pnl - pnl_r_shock)
                 
-                # 만약 기울기가 모두 0이면 (초기 상태 등) 강제로 기본 방향 설정
+                # 2. [수술 부위] Dead Gradient 방지 및 Macro Correlation 주입
+                # KOSPI와 삼성전자는 강한 양의 상관관계를 가지므로 서로의 기울기를 공유(Contagion)합니다.
+                # 기본 모멘텀(+1.0)을 주어 어느 하나가 영원히 정지하는 것을 막습니다.
+                grad_k = grad_k_raw + (grad_s_raw * 0.3) + 1.0
+                grad_s = grad_s_raw + (grad_k_raw * 0.5) + 1.5  # 삼성전자의 시장 베타 반영
+                grad_r = grad_r_raw + 2.0
+                
                 total_grad = grad_k + grad_s + grad_r
-                if total_grad == 0:
-                    grad_k, grad_s, grad_r = 1.0, 1.5, 3.0
-                    total_grad = 5.5
-                    
-                # --- 가장 위험한 팩터 방향으로 가중치를 두어 이동 (경사하강) ---
-                # Learning Rate (한 스텝당 최대 이동 허용치)
+                
+                # 3. Learning Rate 적용 이동
                 lr_k, lr_s, lr_r = 2.0, 2.0, 5.0 
                 
                 search_k -= (grad_k / total_grad) * lr_k
@@ -1276,7 +1276,6 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
                 search_k = max(10.0, search_k)
                 search_s = max(10.0, search_s)
                 
-                # 위치 업데이트 및 기록
                 current_pnl = eval_pnl(search_k, search_s, search_r)
                 path_k.append(search_k)
                 path_s.append(search_s)
