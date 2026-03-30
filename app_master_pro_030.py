@@ -11,6 +11,7 @@ from scipy.stats import norm
 
 import google.generativeai as genai
 from neo4j import GraphDatabase
+# from utils.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 import os
 
 import json
@@ -536,11 +537,11 @@ def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limi
 
 def generate_dynamic_scenario(user_input):
     """
-    사용자의 자연어 시나리오를 받아 관련성을 판단하고, 
+    사용자의 자연어 시나리오를 받아 관련성을 판단하고,
     유효한 경우에만 JSON 형태로 파라미터를 추출합니다.
     """
     model = genai.GenerativeModel('gemini-2.5-flash')
-    
+
     prompt = f"""
     너는 금융기관 최고경영진(Senior Management)에게 시장 상황을 보고하는 '수석 리스크 AI 참모'야.
     다음 [사용자 입력]을 분석해서 아래 지시사항에 따라 JSON 형태로만 응답해.
@@ -565,14 +566,14 @@ def generate_dynamic_scenario(user_input):
         ]
     }}
     """
-    
+
     response = model.generate_content(
         prompt,
         generation_config=genai.GenerationConfig(
             response_mime_type="application/json"
         )
     )
-    
+
     return json.loads(response.text)
 
 def stream_scenario_response(total_pnl, scenario_df_json):
@@ -581,7 +582,7 @@ def stream_scenario_response(total_pnl, scenario_df_json):
     사내 규정 기반 대응 방안을 스트리밍합니다.
     """
     model = genai.GenerativeModel('gemini-2.5-flash')
-    
+
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
     방금 매크로 위기 시나리오 시뮬레이션이 종료되었어.
@@ -596,7 +597,7 @@ def stream_scenario_response(total_pnl, scenario_df_json):
     2. 가장 치명적인 영향을 준 리스크 팩터를 지목하고 그 이유(비선형 리스크 확대 등)를 설명할 것.
     3. 사내 리스크 관리 규정(가상의 Article 번호 포함)을 근거로 ELS 운용 데스크와 채권 운용 데스크가 즉각 취해야 할 액션 플랜을 3문단 이내로 제시할 것.
     """
-    
+
     try:
         response = model.generate_content(prompt, stream=True)
         for chunk in response:
@@ -618,7 +619,7 @@ def save_stress_test_to_kg(scenario_json, total_pnl, prescription):
     # DB 연결 정보가 없으면 조용히 넘어감
     if not NEO4J_URI or not NEO4J_PASSWORD:
         return False, "Neo4j 접속 정보가 없어 저장할 수 없습니다. (Fallback)"
-        
+
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
             with driver.session() as session:
@@ -643,7 +644,7 @@ def stream_rst_response(target_loss, k_val, s_val, r_val):
     경영진 보고용 시사점을 실시간 스트리밍합니다.
     """
     model = genai.GenerativeModel('gemini-2.5-flash')
-    
+
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
     방금 경영진이 설정한 '목표 손실({target_loss:,.0f}억 원)'에 도달하는 최악의 다차원 리스크 팩터 조합(역방향 탐색 결과)이 도출되었어.
@@ -658,7 +659,7 @@ def stream_rst_response(target_loss, k_val, s_val, r_val):
     2. 도출된 이 세 가지 핵심 팩터의 복합 충격이 전사 포트폴리오(ELS 비선형 출혈, 채권 금리 리스크)에 미치는 치명적인 파급 경로를 전문가적인 어조로 설명할 것.
     3. 사내 리스크 관리 규정(예: 제75조 복합 위기상황 포지션 한도 관리 규정 등 가상의 Article 포함)을 근거로, 향후 스트레스 테스트 시나리오 기획 시 팩터 간 교차 민감도(Cross-Greeks)를 어떻게 반영해야 하는지, 그리고 어떤 선제적 조치가 필요한지 3문단 이내로 권고할 것.
     """
-    
+
     try:
         response = model.generate_content(prompt, stream=True)
         for chunk in response:
@@ -673,9 +674,9 @@ def stream_rst_response(target_loss, k_val, s_val, r_val):
     except Exception as e:
         yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
-def generate_batch_pipeline(user_input):
+def generate_batch_pipeline(user_input, kg_context):
     """
-    사용자의 자연어 지시를 분석하여 시스템 작업 종속성을 파악하고,
+    사용자의 자연어 지시와 사내 지식 그래프(Neo4j)의 작업 종속성을 파악하여,
     실행 가능한 배치 파이프라인(DAG)을 JSON 형태로 기안합니다.
     """
     model = genai.GenerativeModel('gemini-2.5-flash')
@@ -684,12 +685,10 @@ def generate_batch_pipeline(user_input):
     너는 금융기관 리스크 시스템의 '수석 IT 오퍼레이션 AI 에이전트'야.
     사용자의 자연어 작업 지시를 분석해서 아래 JSON 형식으로만 응답해.
 
-    [시스템 구성 및 종속성 지식 (Fact)]
-    1. Data_Fetch (시장 데이터 수집)
-    2. Pricing_Engine (그릭스 산출. Data_Fetch가 선행되어야 함)
-    3. VaR_Engine (VaR 및 PnL 산출. Pricing_Engine이 선행되어야 함)
-    4. Report_Gen (보고서 생성. VaR_Engine이 선행되어야 함)
-    * 사용자가 후행 작업만 지시하더라도, 필수 선행 작업이 누락되었다면 네가 알아서 파이프라인 앞단에 추가해야 해.
+    [시스템 구성 및 종속성 지식 (Neo4j GraphRAG)]
+    {kg_context}
+    
+    * 주의: 사용자가 후행 작업만 지시하더라도, 위 지식 그래프 정보에 명시된 필수 선행 작업이 누락되었다면 네가 알아서 파이프라인 앞단에 추가해야 해.
 
     [사용자 지시]
     {user_input}
@@ -706,8 +705,8 @@ def generate_batch_pipeline(user_input):
         "date_range": "예: 26.01.15 ~ 26.02.14",
         "est_time_minutes": 45,
         "inferred_tasks": [
-            {{"step": 1, "task": "Data Fetch", "desc": "시장 데이터 검증", "is_auto_added": true}},
-            {{"step": 2, "task": "Pricing Engine", "desc": "그릭스 재산출", "is_auto_added": false}}
+            {{"step": 1, "task": "Data_Fetch", "desc": "시장 데이터 수집", "is_auto_added": true}},
+            {{"step": 2, "task": "Pricing_Engine", "desc": "그릭스 산출", "is_auto_added": false}}
         ]
     }}
     """
@@ -718,12 +717,54 @@ def generate_batch_pipeline(user_input):
     )
     return json.loads(response.text)
 
+def get_batch_dependencies_from_kg():
+    """
+    Neo4j 지식 그래프에서 배치 작업(BatchJob) 목록과 선후행 종속성(REQUIRES)을 조회합니다.
+    """
+    kg_context = ""
+
+    # DB 접속 정보가 없으면 시연용 Fallback 하드코딩 반환
+    if not NEO4J_URI or not NEO4J_PASSWORD:
+        return """
+        [사내 배치 작업(Job) 및 선행 조건(Dependency) 정보 - Fallback]
+        - 작업명: Data_Fetch | 설명: 시장 데이터 수집 (선행 작업 없음)
+        - 작업명: Pricing_Engine | 설명: 그릭스 산출 (선행 필수 작업: Data_Fetch)
+        - 작업명: VaR_Engine | 설명: VaR 산출 (선행 필수 작업: Pricing_Engine)
+        - 작업명: Report_Gen | 설명: 보고서 생성 (선행 필수 작업: VaR_Engine)
+        """
+
+    try:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
+            with driver.session() as session:
+                # 각 작업 노드와 그 선행 작업(REQUIRES)을 찾는 쿼리
+                query = """
+                MATCH (j:BatchJob)
+                OPTIONAL MATCH (j)-[:REQUIRES]->(req:BatchJob)
+                RETURN j.name AS job, j.description AS desc, req.name AS requires
+                """
+                result = session.run(query)
+                records = list(result)
+
+                if not records:
+                    return "배치 작업 종속성 데이터를 찾을 수 없습니다."
+
+                kg_context += "[사내 배치 작업(Job) 및 선행 조건(Dependency) 정보 (Neo4j 추출)]\n"
+                for record in records:
+                    req_str = f" (선행 필수 작업: {record['requires']})" if record['requires'] else " (선행 작업 없음)"
+                    kg_context += f"- 작업명: {record['job']} | 설명: {record['desc']}{req_str}\n"
+
+    except Exception as e:
+        kg_context = f"⚠️ Neo4j DB 연결 실패 (Error: {str(e)[:50]}...). 배치 종속성 정보를 불러오지 못했습니다.\n\n"
+
+    return kg_context
+
+
 def analyze_incident_log(error_log):
     """
     에러 로그를 분석하여 지식 그래프 추론 경로(시뮬레이션)와 해결 가이드를 JSON으로 반환합니다.
     """
     model = genai.GenerativeModel('gemini-2.5-flash')
-    
+
     prompt = f"""
     너는 IT 인프라 및 금융 리스크 시스템의 'L1/L2 장애 대응 AI 에이전트'야.
     다음 [장애 로그]를 분석해서, 사내 지식 그래프(과거 해결 이력 Jira 티켓 등)에서 유사 사례를 찾았다고 가정하고 1차 대응 가이드를 기안해.
@@ -741,7 +782,7 @@ def analyze_incident_log(error_log):
         ]
     }}
     """
-    
+
     response = model.generate_content(
         prompt,
         generation_config=genai.GenerationConfig(response_mime_type="application/json")
@@ -755,10 +796,10 @@ def draft_escalation_email(error_log, action_plan):
     model = genai.GenerativeModel('gemini-2.5-flash')
     prompt = f"""
     너는 장애 1차 대응에 실패하여 L3 유지보수팀(개발팀)에 에스컬레이션 이메일을 보내는 시스템 에이전트야.
-    
+
     [발생한 장애 로그]: {error_log}
     [시도했던 1차 조치 내역]: {action_plan}
-    
+
     위 내용을 바탕으로 수신자(To), 참조(CC), 제목(Subject), 장애 개요, 1차 조치 내역, 상세 요청 사항이 포함된 이메일 본문을 마크다운 형식으로 프로페셔널하게 작성해.
     """
     return model.generate_content(prompt).text
@@ -1121,11 +1162,11 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             "매크로 위기 시나리오 입력:",
             value="전쟁 확전으로 인해 유가가 급등하고 인플레이션 우려로 금리가 오르며 반도체 섹터와 아시아 증시가 장기 침체될 것 같다. 회사 손익과 포트폴리오에 미치는 영향을 분석해 보자."
         )
-        
+
         if st.button("AI 시나리오 파라미터 기안 생성", key="btn_fw", use_container_width=True):
             with st.spinner("경영진 보고용 시나리오 파라미터를 추론 중입니다..."):
                 result = generate_dynamic_scenario(scenario_prompt)
-                
+
                 # AI가 금융 리스크와 관련이 있다고 판단한 경우만 다음 스텝으로 진행
                 if result.get("is_relevant", False):
                     st.session_state.scenario_data = result
@@ -1138,7 +1179,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
         # scenario_step이 1 이상일 때만 아래 결과를 보여줌
         if st.session_state.scenario_step >= 1 and 'scenario_data' in st.session_state:
             s_data = st.session_state.scenario_data
-            
+
             st.markdown("---")
             st.markdown("#### b. AI 시나리오 추론 및 근거 (동적 생성)")
 
@@ -1158,7 +1199,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             if 'parameters' in s_data and s_data['parameters']:
                 df_params = pd.DataFrame(s_data['parameters'])
                 df_params.columns = ["리스크 팩터", "현재 수준", "최대 충격 (Target)", "충격 도달 기간"]
-                
+
                 edited_df = st.data_editor(df_params, use_container_width=True, hide_index=True)
 
                 if st.button("✅ 기안 승인 및 Full Revaluation 실행", key="btn_fw_run", type="primary", use_container_width=True):
@@ -1179,7 +1220,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
 
             # --- [동적 파싱] 왼쪽 표에서 데이터 추출 및 궤적 생성 ---
             df = st.session_state.final_scenario_df
-            
+
             # 텍스트에서 마지막 숫자를 추출하는 헬퍼 함수 ("25% 하락(75%)" -> 75.0)
             def get_target_num(text, default=100.0):
                 nums = re.findall(r'[-+]?\d*\.?\d+', str(text))
@@ -1190,12 +1231,12 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             kospi_target = 100.0
             samsung_target = 100.0
             duration_days = 14
-            
+
             for _, row in df.iterrows():
                 factor = row["리스크 팩터"]
                 target_val = get_target_num(row["최대 충격 (Target)"])
                 days_val = int(get_target_num(row["충격 도달 기간"], 14))
-                
+
                 if "금리" in factor: rate_target = target_val
                 elif "KOSPI" in factor: kospi_target = target_val
                 elif "삼성전자" in factor: samsung_target = target_val
@@ -1206,10 +1247,10 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             traj_x = np.linspace(100, kospi_target, steps_count).tolist()
             traj_y = np.linspace(100, samsung_target, steps_count).tolist()
             rate_shocks = np.linspace(0, rate_target, steps_count).tolist()
-            
+
             # Z축(차트 높이)은 X, Y 하락분에 비례해서 대략적으로 떨어지도록 동적 연산
             traj_z = [100 - ((100 - x) * 1.5 + (100 - y) * 1.5) for x, y in zip(traj_x, traj_y)]
-            
+
             # 동적 시간 라벨 생성
             time_labels = [f"Day {int(d)}" for d in np.linspace(0, duration_days, steps_count)]
             time_labels[0] = "Day 0 (정상)"
@@ -1283,7 +1324,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
 
             with st.container(border=True):
                 scenario_json_str = df.to_dict(orient="records")
-                
+
                 # 버튼 클릭 시마다 AI가 다시 스트리밍하는 것을 방지하기 위해 세션에 텍스트 저장
                 if 'generated_prescription' not in st.session_state:
                     # AI 스트리밍 실행 후 완성된 전체 텍스트를 변수에 캡처!
@@ -1298,11 +1339,11 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             if st.button("💾 이 분석 결과 및 AI 처방을 지식 그래프(Neo4j)에 아카이빙", type="primary", use_container_width=True):
                 with st.spinner("Neo4j Aura DB에 스트레스 테스트 이력을 적재 중입니다..."):
                     success, msg = save_stress_test_to_kg(
-                        scenario_json_str, 
-                        final_total_pnl, 
+                        scenario_json_str,
+                        final_total_pnl,
                         st.session_state.generated_prescription
                     )
-                    
+
                     if success:
                         st.success(f"✅ {msg}")
                         st.info("💡 향후 '장애 대응 가이드 에이전트'가 유사한 위기 상황 발생 시 이 이력을 참조하여 더 스마트한 처방을 내리게 됩니다.")
@@ -1342,7 +1383,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             mkt = base_mkt_state.copy()
             mkt['KOSPI200_Close'] *= (k_pct / 100.0)
             mkt['Samsung_Close'] *= (s_pct / 100.0)
-            
+
             # 1. 하이닉스는 KOSPI와 삼성전자(반도체 대장)의 영향을 반반씩 받도록 수정
             mkt['SKHynix_Close'] *= ((k_pct + s_pct) / 200.0)
             mkt['Naver_Close'] *= (k_pct / 100.0)
@@ -1350,12 +1391,12 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']:
                 mkt[tenor] += (r_bp / 100.0)
 
-            # 2. 변동성(Vol)과 유동성은 KOSPI와 삼성전자 중 '더 심하게 빠진 쪽'에 연동시켜 
+            # 2. 변동성(Vol)과 유동성은 KOSPI와 삼성전자 중 '더 심하게 빠진 쪽'에 연동시켜
             # 삼성전자가 빠져도 베가(Vega) 손실이 발생하도록 수정!
-            worst_drop = min(k_pct, s_pct) 
+            worst_drop = min(k_pct, s_pct)
             vol_bump = (100 - worst_drop) * 0.005
             liq_drop = (100 - worst_drop) * 1.5
-            
+
             for key in mkt.keys():
                 if key.startswith('Vol_'): mkt[key] += vol_bump
                 elif key.endswith('_Intensity'): mkt[key] -= liq_drop
@@ -1365,12 +1406,12 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         # 🚀 [1단계 핵심 수정] 진정한 경사하강법 + Macro Contagion Momentum
         # ELS Worst-Of 로직으로 인한 Dead Gradient 방어 및 상관관계 주입
         # =========================================================================
-        target_pnl_raw = target_loss_input * 100000000  
-        
+        target_pnl_raw = target_loss_input * 100000000
+
         search_k = 100.0
         search_s = 100.0
         search_r = 0.0
-        
+
         # P&L 평가를 위한 래퍼(Wrapper) 함수
         def eval_pnl(k, s, r):
             tmkt = get_shocked_mkt(k, s, r)
@@ -1381,41 +1422,41 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         with st.spinner(f"비선형 리스크(ELS 배리어)와 시장 상관관계를 고려한 위기 경로 탐색 중..."):
             path_k, path_s, path_r = [100.0], [100.0], [0.0]
             current_pnl = eval_pnl(search_k, search_s, search_r)
-            
+
             for _ in range(50):
                 if current_pnl <= target_pnl_raw:
                     break
-                    
+
                 # 1. 유한차분법으로 순수 편미분(Gradient) 계산
-                eps = 1.0 
+                eps = 1.0
                 pnl_k_shock = eval_pnl(search_k - eps, search_s, search_r)
                 pnl_s_shock = eval_pnl(search_k, search_s - eps, search_r)
                 pnl_r_shock = eval_pnl(search_k, search_s, search_r + eps)
-                
+
                 grad_k_raw = max(0, current_pnl - pnl_k_shock)
                 grad_s_raw = max(0, current_pnl - pnl_s_shock)
                 grad_r_raw = max(0, current_pnl - pnl_r_shock)
-                
+
                 # 2. [수술 부위] Dead Gradient 방지 및 Macro Correlation 주입
                 # KOSPI와 삼성전자는 강한 양의 상관관계를 가지므로 서로의 기울기를 공유(Contagion)합니다.
                 # 기본 모멘텀(+1.0)을 주어 어느 하나가 영원히 정지하는 것을 막습니다.
                 grad_k = grad_k_raw + (grad_s_raw * 0.3) + 1.0
                 grad_s = grad_s_raw + (grad_k_raw * 0.5) + 1.5  # 삼성전자의 시장 베타 반영
                 grad_r = grad_r_raw + 2.0
-                
+
                 total_grad = grad_k + grad_s + grad_r
-                
+
                 # 3. Learning Rate 적용 이동
-                lr_k, lr_s, lr_r = 2.0, 2.0, 5.0 
-                
+                lr_k, lr_s, lr_r = 2.0, 2.0, 5.0
+
                 search_k -= (grad_k / total_grad) * lr_k
                 search_s -= (grad_s / total_grad) * lr_s
                 search_r += (grad_r / total_grad) * lr_r
-                
+
                 # 자산 가치 하한선 방어
                 search_k = max(10.0, search_k)
                 search_s = max(10.0, search_s)
-                
+
                 current_pnl = eval_pnl(search_k, search_s, search_r)
                 path_k.append(search_k)
                 path_s.append(search_s)
@@ -1431,13 +1472,13 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         r_path = [path_r[i] for i in indices]
 
         # --- 배경 지형도(Contour) 데이터의 축 범위를 탐색 결과에 맞춰 동적으로 확장 ---
-        grid_size = 15 
-        grid_min_k = max(0, int(search_k) - 10) 
+        grid_size = 15
+        grid_min_k = max(0, int(search_k) - 10)
         grid_min_s = max(0, int(search_s) - 10)
-        
+
         k_grid = np.linspace(min(50, grid_min_k), 100, grid_size)
         s_grid = np.linspace(min(50, grid_min_s), 100, grid_size)
-        
+
         K_MESH, S_MESH = np.meshgrid(k_grid, s_grid)
         Z_PNL = np.zeros((grid_size, grid_size))
 
@@ -1523,7 +1564,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         # --- [수정] 탐색 완료 후 경영진 보고용 시사점 출력 (AI 스트리밍 적용!) ---
         st.markdown("---")
         st.markdown("#### 🚨 AI 참모의 역위기상황(RST) 진단 및 경영진 시사점")
-        
+
         with st.container(border=True):
             # 엔진이 최종 도출한 current_k, current_s, current_r 값을 AI에게 전달
             st.write_stream(stream_rst_response(target_loss_input, current_k, current_s, current_r))
@@ -1586,8 +1627,12 @@ elif main_menu == "3. 시스템 오퍼레이션":
 
         if st.button("AI 파이프라인 기안 (Draft) 생성 🚀", use_container_width=True):
             with st.spinner("자연어 분석 및 작업 종속성(Dependency) 파악 중..."):
-                result = generate_batch_pipeline(user_input)
+                # 1. Neo4j에서 배치 작업 종속성 지식 가져오기 (GraphRAG)
+                kg_context = get_batch_dependencies_from_kg()
                 
+                # 2. 가져온 지식을 바탕으로 AI 프롬프트 실행
+                result = generate_batch_pipeline(user_input, kg_context)
+
                 if result.get("is_valid"):
                     st.session_state.batch_data = result
                     st.session_state.batch_step = 1
@@ -1597,7 +1642,7 @@ elif main_menu == "3. 시스템 오퍼레이션":
 
         if st.session_state.batch_step == 1 and 'batch_data' in st.session_state:
             b_data = st.session_state.batch_data
-            
+
             st.success("✅ 시스템 파라미터 매핑 및 작업 종속성 검증 완료")
 
             with st.expander("🔍 AI 파라미터 추출 결과 (시스템 매핑)", expanded=False):
@@ -1609,7 +1654,7 @@ elif main_menu == "3. 시스템 오퍼레이션":
                 })
 
             st.markdown("### 📋 AI 기안: 자동 생성된 작업 파이프라인(DAG)")
-            
+
             # 자동 추가된 작업이 있는지 검사
             has_auto_added = any(task.get("is_auto_added", False) for task in b_data.get("inferred_tasks", []))
             if has_auto_added:
@@ -1672,7 +1717,7 @@ elif main_menu == "4. 장애 대응 가이드 에이전트":
     with col2:
         if st.session_state.incident_step >= 1 and 'incident_data' in st.session_state:
             i_data = st.session_state.incident_data
-            
+
             st.subheader("🤖 AI 에이전트 분석 결과")
 
             with st.status("지식 그래프 탐색 완료", expanded=False) as status:
@@ -1687,7 +1732,7 @@ elif main_menu == "4. 장애 대응 가이드 에이전트":
 
             # 1차 조치 가이드라인 (동적 렌더링)
             st.info("💡 **1차 대응 가이드라인 (추천도: 높음)**\n\n과거 유사 장애 해결 이력을 바탕으로 다음 조치를 순서대로 수행해 보십시오.")
-            
+
             action_text = ""
             for idx, action in enumerate(i_data.get('action_plan', [])):
                 st.markdown(f"**조치 {idx+1}.** {action}")
@@ -1700,17 +1745,17 @@ elif main_menu == "4. 장애 대응 가이드 에이전트":
             with col_a:
                 if st.button("✅ 1차 조치로 해결됨 (DB 이력 저장)", use_container_width=True):
                     st.success("해결 이력이 지식 그래프에 업데이트되었습니다. 시스템이 정상화되었습니다.")
-                    st.session_state.incident_step = 0 
+                    st.session_state.incident_step = 0
 
             with col_b:
                 if st.button("🚨 1차 대응 실패 (L3 에스컬레이션)", use_container_width=True):
                     st.session_state.incident_step = 2
-                    
+
                     # 1차 대응 실패 시 이메일 초안 생성 (로딩 스피너)
                     with st.spinner("에스컬레이션 리포트 작성 중..."):
                         if 'escalation_email' not in st.session_state:
                             st.session_state.escalation_email = draft_escalation_email(
-                                st.session_state.error_log_text, 
+                                st.session_state.error_log_text,
                                 action_text
                             )
 
