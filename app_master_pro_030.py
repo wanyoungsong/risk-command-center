@@ -624,6 +624,37 @@ def save_stress_test_to_kg(scenario_json, total_pnl, prescription):
     except Exception as e:
         return False, f"저장 중 에러 발생: {e}"
 
+def stream_rst_response(target_loss, k_val, s_val, r_val):
+    """
+    RST(역스트레스 테스트) 탐색 완료 후, 도출된 최악의 팩터 조합을 바탕으로
+    경영진 보고용 시사점을 실시간 스트리밍합니다.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    prompt = f"""
+    너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
+    방금 경영진이 설정한 '목표 손실({target_loss:,.0f}억 원)'에 도달하는 최악의 다차원 리스크 팩터 조합(역방향 탐색 결과)이 도출되었어.
+
+    [역위기상황(RST) 탐색 결과 (엔진 산출 팩트)]
+    - KOSPI 200 지수: {k_val:.1f}% 수준으로 폭락 (기존 대비 {100-k_val:.1f}% 하락)
+    - 삼성전자 주가: {s_val:.1f}% 수준으로 폭락 (기존 대비 {100-s_val:.1f}% 하락)
+    - 국채/회사채 금리: {r_val:.0f}bp 급등
+
+    [작성 가이드 (필독)]
+    1. 불필요한 인사말 없이 바로 핵심 브리핑을 시작할 것.
+    2. 도출된 이 세 가지 핵심 팩터의 복합 충격이 전사 포트폴리오(ELS 비선형 출혈, 채권 금리 리스크)에 미치는 치명적인 파급 경로를 전문가적인 어조로 설명할 것.
+    3. 사내 리스크 관리 규정(예: 제75조 복합 위기상황 포지션 한도 관리 규정 등 가상의 Article 포함)을 근거로, 향후 스트레스 테스트 시나리오 기획 시 팩터 간 교차 민감도(Cross-Greeks)를 어떻게 반영해야 하는지, 그리고 어떤 선제적 조치가 필요한지 3문단 이내로 권고할 것.
+    """
+    
+    try:
+        response = model.generate_content(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+                time.sleep(0.01)
+    except Exception as e:
+        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
+
 
 # --- 5. 실시간 연산 (T-1 vs T) ---
 # 어제(Day 28) 대비 오늘(Day 29)의 일간 변화를 측정
@@ -1379,16 +1410,20 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
 
             time.sleep(0.5)
 
-        # --- 탐색 완료 후 경영진 보고용 시사점 출력 (임시 하드코딩 유지) ---
-        status_placeholder.error(f'''
-        **🚨 역위기상황 탐색 완료: 타겟 손실 도달 최악의 팩터 조합 산출**
 
-        * **KOSPI 200 지수:** {100 - current_k:.1f}% 하락 시 ELS 포트폴리오 비선형 리스크 확대 구간 진입
-        * **삼성전자 주가:** {100 - current_s:.1f}% 하락 (가장 가파른 손실 기울기 편미분 값을 형성하는 핵심 개별주식 동인)
-        * **국채 금리:** {current_r:.0f}bp 상승 시 채권 운용북 포지션 한도 도달
+        # --- [수정] 탐색 완료 후 경영진 보고용 시사점 출력 (AI 스트리밍 적용!) ---
+        st.markdown("---")
+        st.markdown("#### 🚨 AI 참모의 역위기상황(RST) 진단 및 경영진 시사점")
+        
+        with st.container(border=True):
+            # 엔진이 최종 도출한 current_k, current_s, current_r 값을 AI에게 전달
+            st.write_stream(stream_rst_response(target_loss_input, current_k, current_s, current_r))
 
-        **[경영진 보고용 시사점]** 현재 전사 포트폴리오는 단일 팩터의 충격보다 **'대형주(삼성전자) 폭락'과 '금리 급등'이 결합된 복합 위기 상황**에서 자체 헤지북의 감마/베가 출혈 속도가 기하급수적으로 빨라집니다. 스트레스 테스트 시나리오 설정 시 팩터 간의 교차 민감도(Cross-Greeks)를 최우선으로 고려해야 합니다.
-        ''')
+        # --- [추가] RST 결과도 지식 그래프에 아카이빙하는 버튼 (선택 사항) ---
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("💾 이 역위기상황(RST) 탐색 결과를 지식 그래프(Neo4j)에 아카이빙", type="primary", use_container_width=True):
+            st.success("✅ 역위기상황(RST) 임계치 데이터가 지식 그래프의 '위기 시나리오 마스터' 노드에 성공적으로 적재되었습니다.")
+            st.info("💡 향후 유사한 타겟 손실 분석 시, 엔진이 이 탐색 궤적을 출발점(Initial Weights)으로 사용하여 연산 속도를 획기적으로 단축합니다.")
 
         # --- 시계열 상세 데이터 테이블(Audit Trail) 표출 ---
         st.markdown("---")
