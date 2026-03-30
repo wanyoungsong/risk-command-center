@@ -598,6 +598,32 @@ def stream_scenario_response(total_pnl, scenario_df_json):
     except Exception as e:
         yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
+def save_stress_test_to_kg(scenario_json, total_pnl, prescription):
+    """
+    스트레스 테스트 결과를 Neo4j에 'StressTestEvent' 노드로 저장합니다.
+    """
+    # DB 연결 정보가 없으면 조용히 넘어감
+    if not NEO4J_URI or not NEO4J_PASSWORD:
+        return False, "Neo4j 접속 정보가 없어 저장할 수 없습니다. (Fallback)"
+        
+    try:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
+            with driver.session() as session:
+                # StressTestEvent라는 새로운 노드를 생성하고 데이터를 속성으로 저장하는 Cypher 쿼리
+                query = """
+                CREATE (e:StressTestEvent {
+                    timestamp: datetime(),
+                    scenario: $scenario,
+                    total_pnl: $pnl,
+                    prescription: $prescription
+                })
+                RETURN e
+                """
+                session.run(query, scenario=str(scenario_json), pnl=float(total_pnl), prescription=str(prescription))
+        return True, "성공적으로 지식 그래프에 적재되었습니다."
+    except Exception as e:
+        return False, f"저장 중 에러 발생: {e}"
+
 
 # --- 5. 실시간 연산 (T-1 vs T) ---
 # 어제(Day 28) 대비 오늘(Day 29)의 일간 변화를 측정
@@ -999,6 +1025,10 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
                     st.session_state.final_scenario_df = edited_df
                     st.session_state.scenario_step = 2
 
+                    # --- [추가된 부분] 새로운 시뮬레이션을 위해 이전 처방전 텍스트 초기화 ---
+                    if 'generated_prescription' in st.session_state:
+                        del st.session_state['generated_prescription']
+
     with col_right:
         if st.session_state.scenario_step == 2:
             st.markdown("#### d. 시계열 파급 분석 (Time-Step Full Revaluation)")
@@ -1110,15 +1140,34 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             # --- [동적 생성] AI 상황 판단 및 사내 규정 기반 대응 방안 ---
             st.markdown("---")
             st.markdown("#### e. AI 상황 판단 및 사내 규정 기반 대응 방안")
-            
+
             with st.container(border=True):
-                # DataFrame을 AI가 읽기 편하게 JSON(Dictionary) 문자열로 변환
                 scenario_json_str = df.to_dict(orient="records")
                 
-                # Gemini 스트리밍 호출! (하드코딩 제거 완료)
-                st.write_stream(stream_scenario_response(final_total_pnl, scenario_json_str))
+                # 버튼 클릭 시마다 AI가 다시 스트리밍하는 것을 방지하기 위해 세션에 텍스트 저장
+                if 'generated_prescription' not in st.session_state:
+                    # AI 스트리밍 실행 후 완성된 전체 텍스트를 변수에 캡처!
+                    full_text = st.write_stream(stream_scenario_response(final_total_pnl, scenario_json_str))
+                    st.session_state.generated_prescription = full_text
+                else:
+                    # 이미 생성된 처방전이 있다면 스트리밍 없이 바로 텍스트 출력
+                    st.markdown(st.session_state.generated_prescription)
 
-
+            # --- [신규 추가] 지식 그래프(Neo4j) 아카이빙 버튼 ---
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 이 분석 결과 및 AI 처방을 지식 그래프(Neo4j)에 아카이빙", type="primary", use_container_width=True):
+                with st.spinner("Neo4j Aura DB에 스트레스 테스트 이력을 적재 중입니다..."):
+                    success, msg = save_stress_test_to_kg(
+                        scenario_json_str, 
+                        final_total_pnl, 
+                        st.session_state.generated_prescription
+                    )
+                    
+                    if success:
+                        st.success(f"✅ {msg}")
+                        st.info("💡 향후 '장애 대응 가이드 에이전트'가 유사한 위기 상황 발생 시 이 이력을 참조하여 더 스마트한 처방을 내리게 됩니다.")
+                    else:
+                        st.error(f"⚠️ {msg}")
 
 
 # ==========================================
