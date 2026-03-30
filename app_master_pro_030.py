@@ -1216,40 +1216,78 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             return mkt
 
         # =========================================================================
-        # 🚀 [1단계 핵심] 목표 손실(Target Loss) 도달을 위한 동적 역산 탐색 알고리즘
+        # 🚀 [1단계 핵심 수정] 진정한 경사하강법(Gradient Descent) 기반 역산 탐색
+        # 비선형 상품(ELS)의 편미분(Gradient)을 계산하여 손실이 가장 가파른 방향으로 궤적을 틉니다.
         # =========================================================================
         target_pnl_raw = target_loss_input * 100000000  # 억 원 -> 원 단위 변환
-        
+                
         search_k = 100.0
         search_s = 100.0
         search_r = 0.0
         
-        with st.spinner(f"목표 손실({target_loss_input:,.0f}억 원)을 유발하는 최악의 리스크 팩터 조합을 탐색 중입니다..."):
-            for _ in range(100):
-                # [수정] 자산 가치가 0 이하로 떨어지는 것을 방지 (하한선 10% 설정)
-                search_k = max(10.0, search_k - 1.0)  
-                search_s = max(10.0, search_s - 1.5)  
-                search_r += 3.0  
-                
-                temp_mkt = get_shocked_mkt(search_k, search_s, search_r)
-                temp_bonds = revalue_bonds_multi(df_bonds_scaled, temp_mkt, base_mkt_state)
-                temp_els = revalue_els_multi(df_els, temp_mkt, base_mkt_state)
-                
-                temp_total_pnl = temp_bonds['pnl'].sum() + temp_els['pnl'].sum()
-                
-                if temp_total_pnl <= target_pnl_raw:
+        # P&L 평가를 위한 래퍼(Wrapper) 함수
+        def eval_pnl(k, s, r):
+            tmkt = get_shocked_mkt(k, s, r)
+            tb = revalue_bonds_multi(df_bonds_scaled, tmkt, base_mkt_state)
+            te = revalue_els_multi(df_els, tmkt, base_mkt_state)
+            return tb['pnl'].sum() + te['pnl'].sum()
+
+        with st.spinner(f"비선형 리스크(ELS 배리어 등)를 고려한 최적 위기 경로를 탐색 중입니다..."):
+            # 탐색 궤적을 모두 저장할 리스트
+            path_k, path_s, path_r = [100.0], [100.0], [0.0]
+            current_pnl = eval_pnl(search_k, search_s, search_r)
+            
+            for _ in range(50): # 최대 50 스텝 전진
+                if current_pnl <= target_pnl_raw:
                     break
+                    
+                # --- 유한차분법(Finite Difference)으로 현재 좌표의 편미분(Gradient) 계산 ---
+                eps = 0.5 # 미세 충격량
+                pnl_k_shock = eval_pnl(search_k - eps, search_s, search_r)
+                pnl_s_shock = eval_pnl(search_k, search_s - eps, search_r)
+                pnl_r_shock = eval_pnl(search_k, search_s, search_r + eps)
+                
+                # 손실이 얼마나 가파르게 증가하는지(기울기) 산출 (양수일수록 위험함)
+                grad_k = max(0, current_pnl - pnl_k_shock)
+                grad_s = max(0, current_pnl - pnl_s_shock)
+                grad_r = max(0, current_pnl - pnl_r_shock)
+                
+                # 만약 기울기가 모두 0이면 (초기 상태 등) 강제로 기본 방향 설정
+                total_grad = grad_k + grad_s + grad_r
+                if total_grad == 0:
+                    grad_k, grad_s, grad_r = 1.0, 1.5, 3.0
+                    total_grad = 5.5
+                    
+                # --- 가장 위험한 팩터 방향으로 가중치를 두어 이동 (경사하강) ---
+                # Learning Rate (한 스텝당 최대 이동 허용치)
+                lr_k, lr_s, lr_r = 2.0, 2.0, 5.0 
+                
+                search_k -= (grad_k / total_grad) * lr_k
+                search_s -= (grad_s / total_grad) * lr_s
+                search_r += (grad_r / total_grad) * lr_r
+                
+                # 자산 가치 하한선 방어
+                search_k = max(10.0, search_k)
+                search_s = max(10.0, search_s)
+                
+                # 위치 업데이트 및 기록
+                current_pnl = eval_pnl(search_k, search_s, search_r)
+                path_k.append(search_k)
+                path_s.append(search_s)
+                path_r.append(search_r)
 
-        st.success(f"✅ DML 프록시 엔진 탐색 완료. 목표 손실({target_loss_input:,.0f}억 원)에 도달하는 최단 위기 좌표 궤적을 찾았습니다!")
+        st.success(f"✅ DML 경사하강법 탐색 완료. 비선형 손실을 극대화하는 곡선 궤적을 도출했습니다.")
 
+        # 탐색된 촘촘한 경로를 애니메이션 스텝 수(10개)에 맞춰 추출(Interpolation)
         steps = 10
-        k_path = np.linspace(100, search_k, steps)
-        s_path = np.linspace(100, search_s, steps)
-        r_path = np.linspace(0, search_r, steps)
+        indices = np.linspace(0, len(path_k)-1, steps).astype(int)
+        k_path = [path_k[i] for i in indices]
+        s_path = [path_s[i] for i in indices]
+        r_path = [path_r[i] for i in indices]
 
-        # --- [수정] 배경 지형도(Contour) 데이터의 축 범위를 탐색 결과에 맞춰 동적으로 확장 ---
+        # --- 배경 지형도(Contour) 데이터의 축 범위를 탐색 결과에 맞춰 동적으로 확장 ---
         grid_size = 15 
-        grid_min_k = max(0, int(search_k) - 10) # 궤적의 끝점보다 10% 더 넓게 여백 확보
+        grid_min_k = max(0, int(search_k) - 10) 
         grid_min_s = max(0, int(search_s) - 10)
         
         k_grid = np.linspace(min(50, grid_min_k), 100, grid_size)
