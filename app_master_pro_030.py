@@ -1186,8 +1186,6 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             st.session_state.rst_step = 1
 
     if st.session_state.rst_step == 1:
-        # st.success("✅ DML 프록시 엔진 탐색 완료...") <- 이 메시지는 진짜 탐색이 끝난 뒤에 띄우도록 아래로 내릴게!
-
         col_r1, col_r2 = st.columns(2)
 
         radar_placeholder = col_r1.empty()
@@ -1199,7 +1197,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         df_bonds_scaled = df_bonds.copy()
         df_bonds_scaled['qty'] = df_bonds_scaled['qty'] * 100
 
-        # --- [신규 위치] 충격 생성 헬퍼 함수 (탐색기에서 써야 하므로 위로 끌어올림) ---
+        # --- 충격 생성 헬퍼 함수 ---
         def get_shocked_mkt(k_pct, s_pct, r_bp):
             mkt = base_mkt_state.copy()
             mkt['KOSPI200_Close'] *= (k_pct / 100.0)
@@ -1208,7 +1206,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             mkt['Naver_Close'] *= (k_pct / 100.0)
 
             for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']:
-                mkt[tenor] += (r_bp / 100.0) 
+                mkt[tenor] += (r_bp / 100.0)
 
             vol_bump = (100 - k_pct) * 0.005
             liq_drop = (100 - k_pct) * 1.5
@@ -1220,42 +1218,145 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         # =========================================================================
         # 🚀 [1단계 핵심] 목표 손실(Target Loss) 도달을 위한 동적 역산 탐색 알고리즘
         # =========================================================================
-        target_pnl_raw = target_loss_input * 100000000  # 억 원 단위를 엔진용(원) 단위로 변환
+        target_pnl_raw = target_loss_input * 100000000  # 억 원 -> 원 단위 변환
         
-        # 탐색 초기값 세팅 (정상 상태)
         search_k = 100.0
         search_s = 100.0
         search_r = 0.0
         
         with st.spinner(f"목표 손실({target_loss_input:,.0f}억 원)을 유발하는 최악의 리스크 팩터 조합을 탐색 중입니다..."):
-            for _ in range(100):  # 무한 루프 방지를 위해 최대 100번만 반복 (Step)
-                # 팩터별 하락/상승 비율 가설 (삼성전자의 베타(Beta)가 KOSPI보다 크다고 가정)
+            for _ in range(100):  # 최대 100 스텝 전진
                 search_k -= 1.0  # KOSPI 1%p 하락
-                search_s -= 1.5  # 삼성전자 1.5%p 하락
+                search_s -= 1.5  # 삼성전자 1.5%p 하락 (베타 반영)
                 search_r += 3.0  # 국채 금리 3bp 상승
                 
-                # 임시 시장 데이터 생성 및 프라이싱
                 temp_mkt = get_shocked_mkt(search_k, search_s, search_r)
                 temp_bonds = revalue_bonds_multi(df_bonds_scaled, temp_mkt, base_mkt_state)
                 temp_els = revalue_els_multi(df_els, temp_mkt, base_mkt_state)
                 
                 temp_total_pnl = temp_bonds['pnl'].sum() + temp_els['pnl'].sum()
                 
-                # 💡 핵심 로직: 계산된 임시 손실이 사용자가 입력한 목표 손실에 도달(이하)하면 탐색 즉시 중단!
+                # 목표 손실에 도달하면 즉시 중단
                 if temp_total_pnl <= target_pnl_raw:
                     break
 
         st.success(f"✅ DML 프록시 엔진 탐색 완료. 목표 손실({target_loss_input:,.0f}억 원)에 도달하는 최단 위기 좌표 궤적을 찾았습니다!")
 
-        # 탐색된 최종 좌표를 바탕으로 부드러운 애니메이션용 10단계 궤적(Array) 동적 생성
+        # 탐색된 최종 좌표를 바탕으로 부드러운 애니메이션용 10단계 궤적 동적 생성
         steps = 10
-        k_path = np.linspace(100, search_k, steps) 
-        s_path = np.linspace(100, search_s, steps) 
-        r_path = np.linspace(0, search_r, steps) 
-        # =========================================================================
+        k_path = np.linspace(100, search_k, steps)
+        s_path = np.linspace(100, search_s, steps)
+        r_path = np.linspace(0, search_r, steps)
 
         # --- 배경 지형도(Contour) 데이터 사전 연산 ---
-        grid_size = 15 # 렌더링 속도 최적화
+        grid_size = 15 
+        k_grid = np.linspace(50, 100, grid_size)
+        s_grid = np.linspace(50, 100, grid_size)
+        K_MESH, S_MESH = np.meshgrid(k_grid, s_grid)
+        Z_PNL = np.zeros((grid_size, grid_size))
+
+        with st.spinner("손실 지형도(Contour Map) 렌더링 준비 중..."):
+            for i in range(grid_size):
+                for j in range(grid_size):
+                    temp_mkt = get_shocked_mkt(K_MESH[i, j], S_MESH[i, j], (100 - K_MESH[i, j]) * 1.5)
+                    b_res = revalue_bonds_multi(df_bonds_scaled, temp_mkt, base_mkt_state)
+                    e_res = revalue_els_multi(df_els, temp_mkt, base_mkt_state)
+                    Z_PNL[i, j] = (b_res['pnl'].sum() + e_res['pnl'].sum()) / 100000000
+
+        history_data = []
+
+        # --- 애니메이션 루프 (여기부터 부활!) ---
+        for step in range(steps):
+            current_k = k_path[step]
+            current_s = s_path[step]
+            current_r = r_path[step]
+
+            curr_mkt = get_shocked_mkt(current_k, current_s, current_r)
+            sim_bonds = revalue_bonds_multi(df_bonds_scaled, curr_mkt, base_mkt_state)
+            sim_els = revalue_els_multi(df_els, curr_mkt, base_mkt_state)
+
+            step_bond_pnl = sim_bonds['pnl'].sum()
+            step_els_pnl = sim_els['pnl'].sum()
+            current_total_pnl = (step_bond_pnl + step_els_pnl) / 100000000
+
+            # 현재 스텝 기록
+            row_data = {
+                "탐색 단계": f"Step {step+1}",
+                "KOSPI 잔존가치": f"{current_k:.1f}%",
+                "삼성전자 잔존가치": f"{current_s:.1f}%",
+                "국채금리 충격": f"+{current_r:.0f} bp"
+            }
+            for _, r in sim_bonds.iterrows():
+                row_data[f"B_{r['name']}"] = r['price_change'] * r['qty']
+            for _, r in sim_els.iterrows():
+                row_data[f"E_{r['name']}"] = r['price_change'] * r['qty']
+            history_data.append(row_data)
+
+            # [화면 1] 다차원 리스크 팽창 방사형 차트 (Radar)
+            risk_k = max(0, (100 - current_k) / 50 * 100)
+            risk_s = max(0, (100 - current_s) / 50 * 100)
+            risk_r = max(0, current_r / 150 * 100)
+
+            fig_radar = go.Figure(data=go.Scatterpolar(
+                r=[risk_k, risk_s, risk_r, risk_k],
+                theta=['KOSPI 하락 위험', '삼성전자 하락 위험', '국채금리 상승 위험', 'KOSPI 하락 위험'],
+                fill='toself', fillcolor='rgba(255, 75, 75, 0.4)', line=dict(color='red', width=2)
+            ))
+            fig_radar.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                showlegend=False, title=f"다차원 리스크 팩터 팽창 (Iteration {step+1})",
+                height=420, margin=dict(l=40, r=40, t=50, b=40)
+            )
+            radar_placeholder.plotly_chart(fig_radar, use_container_width=True)
+
+            # [화면 2] Top-2 팩터 투영 손실 지형도 (Contour)
+            fig_contour = go.Figure(data=go.Contour(
+                z=Z_PNL, x=k_grid, y=s_grid, colorscale='RdBu',
+                contours=dict(showlabels=True, labelfont=dict(color='white'))
+            ))
+            fig_contour.add_trace(go.Scatter(
+                x=k_path[:step+1], y=s_path[:step+1],
+                mode='lines+markers', line=dict(color='#00FF00', width=4, dash='dot'),
+                marker=dict(size=6, color='black'), name='탐색 궤적'
+            ))
+            fig_contour.add_trace(go.Scatter(
+                x=[current_k], y=[current_s],
+                mode='markers', marker=dict(size=14, color='yellow', symbol='star'),
+                name='현재 탐색 좌표'
+            ))
+            fig_contour.update_layout(
+                title=f"핵심 팩터(Top-2) 투영 손실 지형도<br>현재 추정 Net P&L: <span style='color:red;'>{current_total_pnl:,.0f}억 원</span>",
+                xaxis_title="KOSPI 200 잔존가치 (%)", yaxis_title="삼성전자 잔존가치 (%)",
+                height=420, margin=dict(l=30, r=30, t=60, b=30)
+            )
+            contour_placeholder.plotly_chart(fig_contour, use_container_width=True)
+
+            time.sleep(0.5)
+
+        # --- 탐색 완료 후 경영진 보고용 시사점 출력 (임시 하드코딩 유지) ---
+        status_placeholder.error(f'''
+        **🚨 역위기상황 탐색 완료: 타겟 손실 도달 최악의 팩터 조합 산출**
+
+        * **KOSPI 200 지수:** {100 - current_k:.1f}% 하락 시 ELS 포트폴리오 비선형 리스크 확대 구간 진입
+        * **삼성전자 주가:** {100 - current_s:.1f}% 하락 (가장 가파른 손실 기울기 편미분 값을 형성하는 핵심 개별주식 동인)
+        * **국채 금리:** {current_r:.0f}bp 상승 시 채권 운용북 포지션 한도 도달
+
+        **[경영진 보고용 시사점]** 현재 전사 포트폴리오는 단일 팩터의 충격보다 **'대형주(삼성전자) 폭락'과 '금리 급등'이 결합된 복합 위기 상황**에서 자체 헤지북의 감마/베가 출혈 속도가 기하급수적으로 빨라집니다. 스트레스 테스트 시나리오 설정 시 팩터 간의 교차 민감도(Cross-Greeks)를 최우선으로 고려해야 합니다.
+        ''')
+
+        # --- 시계열 상세 데이터 테이블(Audit Trail) 표출 ---
+        st.markdown("---")
+        st.markdown("#### 3. 역위기상황 탐색 시계열 상세 데이터 (Audit Trail)")
+        st.caption("각 탐색 단계별 리스크 팩터의 변화와 구성 상품 20종의 누적 가격 변화(평가손익, 단위: 원) 추적 내역입니다. 가로로 스크롤하여 전체 포트폴리오를 확인할 수 있습니다.")
+
+        df_history = pd.DataFrame(history_data)
+
+        for col in df_history.columns:
+            if col not in ["탐색 단계", "KOSPI 잔존가치", "삼성전자 잔존가치", "국채금리 충격"]:
+                df_history[col] = df_history[col].apply(lambda x: f"{x:,.0f}")
+
+        st.dataframe(df_history, use_container_width=True, hide_index=True)
+
 
 
 # ==========================================
