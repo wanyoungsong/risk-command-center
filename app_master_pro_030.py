@@ -14,6 +14,7 @@ from neo4j import GraphDatabase
 import os
 
 import json
+import re
 
 # --- 1. 세션 상태 관리 (페이지 이동 시 초기화 방지) ---
 if 'scenario_step' not in st.session_state:
@@ -566,7 +567,36 @@ def generate_dynamic_scenario(user_input):
     
     return json.loads(response.text)
 
+def stream_scenario_response(total_pnl, scenario_df_json):
+    """
+    시뮬레이션 완료 후 최종 손익과 시나리오 파라미터를 바탕으로
+    사내 규정 기반 대응 방안을 스트리밍합니다.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    prompt = f"""
+    너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
+    방금 매크로 위기 시나리오 시뮬레이션이 종료되었어.
+    아래 [시뮬레이션 결과]를 바탕으로 사내 규정에 기반한 임시 조치 가이드를 작성해.
 
+    [시뮬레이션 최종 결과]
+    - 적용된 시나리오 파라미터: {scenario_df_json}
+    - 전사 통합 평가 손익 (최대 손실): {total_pnl / 100000000:,.1f}억 원
+
+    [작성 가이드 (필독)]
+    1. 불필요한 인사말 없이 바로 브리핑을 시작할 것.
+    2. 가장 치명적인 영향을 준 리스크 팩터를 지목하고 그 이유(비선형 리스크 확대 등)를 설명할 것.
+    3. 사내 리스크 관리 규정(가상의 Article 번호 포함)을 근거로 ELS 운용 데스크와 채권 운용 데스크가 즉각 취해야 할 액션 플랜을 3문단 이내로 제시할 것.
+    """
+    
+    try:
+        response = model.generate_content(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+                time.sleep(0.01)
+    except Exception as e:
+        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
 
 # --- 5. 실시간 연산 (T-1 vs T) ---
@@ -918,7 +948,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
     st.markdown("---")
 
     col_left, col_right = st.columns([1.2, 1.8])
-    
+
     with col_left:
         st.markdown("#### a. 시나리오 설정 (자연어 지시)")
         scenario_prompt = st.text_area(
@@ -977,28 +1007,59 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
             metrics_placeholder = st.empty()
             status_text = st.empty()
 
-            # 3D 표면도(Surface) 생성을 위한 기본 데이터
+            # --- [동적 파싱] 왼쪽 표에서 데이터 추출 및 궤적 생성 ---
+            df = st.session_state.final_scenario_df
+            
+            # 텍스트에서 마지막 숫자를 추출하는 헬퍼 함수 ("25% 하락(75%)" -> 75.0)
+            def get_target_num(text, default=100.0):
+                nums = re.findall(r'[-+]?\d*\.?\d+', str(text))
+                return float(nums[-1]) if nums else default
+
+            # 팩터별 목표 수치 초기화
+            rate_target = 0.0
+            kospi_target = 100.0
+            samsung_target = 100.0
+            duration_days = 14
+            
+            for _, row in df.iterrows():
+                factor = row["리스크 팩터"]
+                target_val = get_target_num(row["최대 충격 (Target)"])
+                days_val = int(get_target_num(row["충격 도달 기간"], 14))
+                
+                if "금리" in factor: rate_target = target_val
+                elif "KOSPI" in factor: kospi_target = target_val
+                elif "삼성전자" in factor: samsung_target = target_val
+                duration_days = max(duration_days, days_val) # 가장 긴 기간 기준
+
+            # 동적 궤적(Array) 생성 (7단계 스텝으로 쪼개기)
+            steps_count = 7
+            traj_x = np.linspace(100, kospi_target, steps_count).tolist()
+            traj_y = np.linspace(100, samsung_target, steps_count).tolist()
+            rate_shocks = np.linspace(0, rate_target, steps_count).tolist()
+            
+            # Z축(차트 높이)은 X, Y 하락분에 비례해서 대략적으로 떨어지도록 동적 연산
+            traj_z = [100 - ((100 - x) * 1.5 + (100 - y) * 1.5) for x, y in zip(traj_x, traj_y)]
+            
+            # 동적 시간 라벨 생성
+            time_labels = [f"Day {int(d)}" for d in np.linspace(0, duration_days, steps_count)]
+            time_labels[0] = "Day 0 (정상)"
+            time_labels[-1] = f"Day {duration_days} (최대 손실)"
+
+            # --- 엔진 연산 준비 ---
+            # 3D 표면도(Surface) 생성을 위한 기본 데이터 (기존과 동일)
             x = np.linspace(40, 100, 40)
             y = np.linspace(40, 100, 40)
             X, Y = np.meshgrid(x, y)
             Z = 100 + (X - 100)*0.3 + (Y - 100)*0.3 - np.where(X < 80, (80 - X) * 1.5, 0) - np.where(Y < 60, (60 - Y) * 2.5, 0) - 35 * np.exp(-0.03 * ((X - 75)**2 + (Y - 55)**2))
 
-            time_labels = ["Day 0 (정상)", "Day 1 (초기 충격)", "Day 3 (투심 악화)", "Day 5 (배리어 접근)", "Day 7 (Gamma 상승)", "Day 10 (헤지 꼬임)", "Day 14 (최대 손실)"]
-
-            # KOSPI(x)와 삼성전자(y)의 수익률 궤적 (100 기준)
-            traj_x = [100, 96, 92, 88, 83, 78, 75]
-            traj_y = [100, 93, 85, 76, 68, 60, 55]
-            traj_z = [100, 93, 85, 77, 65, 48, 42]
-            rate_shocks = [0, 10, 30, 50, 70, 85, 100] # bp
-
-            # 기준 시장 상황 (Day 0)
             base_mkt_state = df_market_data.iloc[-1].to_dict()
-
-            # 시각적 밸런스를 위해 채권 수량 100배 보정한 데이터프레임
             df_bonds_scaled = df_bonds.copy()
             df_bonds_scaled['qty'] = df_bonds_scaled['qty'] * 100
 
-            for i in range(len(traj_x)):
+            final_total_pnl = 0 # 최종 P&L 저장용 변수
+
+            # --- 동적 시뮬레이션 루프 실행 ---
+            for i in range(steps_count):
                 # 1. 차트 업데이트
                 fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='Blues', opacity=0.7)])
                 fig.add_trace(go.Scatter3d(x=traj_x[:i+1], y=traj_y[:i+1], z=traj_z[:i+1], mode='lines', line=dict(color='orange', width=6), name='과거 궤적'))
@@ -1006,42 +1067,37 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
                 fig.update_layout(title=f"⏳ 진행 상태: {time_labels[i]}", scene=dict(xaxis_title='KOSPI 200 (%)', yaxis_title='삼성전자 (%)', zaxis_title='포트폴리오 가치', camera=dict(eye=dict(x=-1.5, y=-1.5, z=1.2))), margin=dict(l=0, r=0, b=0, t=30), height=350)
                 chart_placeholder.plotly_chart(fig, use_container_width=True)
 
-                # 2. 다차원 리스크 팩터 동적 생성 (위기 상황 모사)
+                # 2. 다차원 리스크 팩터 동적 생성
                 curr_mkt = base_mkt_state.copy()
 
-                # 주가 하락 반영
                 k_shock_pct = traj_x[i] / 100.0
                 s_shock_pct = traj_y[i] / 100.0
                 curr_mkt['KOSPI200_Close'] *= k_shock_pct
                 curr_mkt['Samsung_Close'] *= s_shock_pct
-                curr_mkt['SKHynix_Close'] *= k_shock_pct  # 반도체 섹터 동반 하락
+                curr_mkt['SKHynix_Close'] *= k_shock_pct
                 curr_mkt['Naver_Close'] *= k_shock_pct
 
-                # 금리 상승 반영
                 for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']:
                     curr_mkt[tenor] += (rate_shocks[i] / 100.0)
 
-                # 주가 하락에 비례하여 변동성(Vol)은 폭등하고 체결강도(Intensity)는 마름
-                vol_bump = (100 - traj_x[i]) * 0.005 # 1% 하락 시 0.5%p 변동성 상승
-                liq_drop = (100 - traj_x[i]) * 1.5   # 1% 하락 시 1.5 체결강도 하락
+                vol_bump = (100 - traj_x[i]) * 0.005
+                liq_drop = (100 - traj_x[i]) * 1.5
 
                 for key in curr_mkt.keys():
-                    if key.startswith('Vol_'):
-                        curr_mkt[key] += vol_bump
-                    elif key.endswith('_Intensity'):
-                        curr_mkt[key] -= liq_drop
+                    if key.startswith('Vol_'): curr_mkt[key] += vol_bump
+                    elif key.endswith('_Intensity'): curr_mkt[key] -= liq_drop
 
-                # 3. 새로운 프라이싱 엔진 연산 (자체 헤지북 로직 반영됨)
+                # 3. 프라이싱 엔진 연산
                 sim_bonds = revalue_bonds_multi(df_bonds_scaled, curr_mkt, base_mkt_state)
                 sim_els = revalue_els_multi(df_els, curr_mkt, base_mkt_state)
 
                 bond_pnl = sim_bonds['pnl'].sum()
                 els_pnl = sim_els['pnl'].sum()
-                total_pnl = bond_pnl + els_pnl
+                final_total_pnl = bond_pnl + els_pnl
 
                 # 4. 결과 출력
                 with metrics_placeholder.container():
-                    st.markdown(f"**실시간 통합 평가 손익 (Full Revaluation):** `<span style='color:red;'>{total_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
+                    st.markdown(f"**실시간 통합 평가 손익 (Full Revaluation):** `<span style='color:red;'>{final_total_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
                     m1, m2 = st.columns(2)
                     m1.metric("채권 포트폴리오 P&L (Scaled)", f"{bond_pnl/100000000:,.1f}억")
                     m2.metric("ELS 자체 헤지북 Net P&L", f"{els_pnl/100000000:,.1f}억")
@@ -1049,19 +1105,21 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
                 status_text.warning(f"다차원 엔진 연산 중... 현재 단계: {time_labels[i]}")
                 time.sleep(0.8)
 
-            status_text.error("🚨 시뮬레이션 종료: 포트폴리오가 최대 손실 구간에 진입했습니다.")
+            status_text.error(f"🚨 시뮬레이션 종료: {duration_days}일 차 최대 충격 구간에 도달했습니다.")
 
+            # --- [동적 생성] AI 상황 판단 및 사내 규정 기반 대응 방안 ---
             st.markdown("---")
             st.markdown("#### e. AI 상황 판단 및 사내 규정 기반 대응 방안")
-            st.error('''
-            **[심각] 전사 누적 손실 한도의 85% 초과 예상**
+            
+            with st.container(border=True):
+                # DataFrame을 AI가 읽기 편하게 JSON(Dictionary) 문자열로 변환
+                scenario_json_str = df.to_dict(orient="records")
+                
+                # Gemini 스트리밍 호출! (하드코딩 제거 완료)
+                st.write_stream(stream_scenario_response(final_total_pnl, scenario_json_str))
 
-            시뮬레이션 14일 차 기준, 금리 상승(+100bp)과 반도체 섹터 폭락이 결합하여 ELS 헤지북의 비선형 패널티(Gamma/Vega)가 극대화되었습니다.
 
-            **📌 사내 리스크 관리 규정 제75조 3항 (위기상황 발생 시 포지션 한도 축소)에 의거한 임시 조치 가이드:**
-            1. **ELS 운용 데스크:** 비선형 손실 웅덩이(Local Minimum) 진입을 방지하기 위해 신규 ELS 롤오버 전면 중지 및 옵션 헤지 비중 30% 즉각 확대 요망.
-            2. **채권 운용 데스크:** 듀레이션 리스크 상쇄를 위해 금리 스왑(IRS) 페이 포지션 구축 또는 장기채 포지션 축소 요망.
-            ''')
+
 
 # ==========================================
 # [페이지 2-2] 역방향 위기 좌표 탐색 (RST)
