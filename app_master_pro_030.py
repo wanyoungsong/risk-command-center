@@ -1225,10 +1225,11 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
         search_r = 0.0
         
         with st.spinner(f"목표 손실({target_loss_input:,.0f}억 원)을 유발하는 최악의 리스크 팩터 조합을 탐색 중입니다..."):
-            for _ in range(100):  # 최대 100 스텝 전진
-                search_k -= 1.0  # KOSPI 1%p 하락
-                search_s -= 1.5  # 삼성전자 1.5%p 하락 (베타 반영)
-                search_r += 3.0  # 국채 금리 3bp 상승
+            for _ in range(100):
+                # [수정] 자산 가치가 0 이하로 떨어지는 것을 방지 (하한선 10% 설정)
+                search_k = max(10.0, search_k - 1.0)  
+                search_s = max(10.0, search_s - 1.5)  
+                search_r += 3.0  
                 
                 temp_mkt = get_shocked_mkt(search_k, search_s, search_r)
                 temp_bonds = revalue_bonds_multi(df_bonds_scaled, temp_mkt, base_mkt_state)
@@ -1236,22 +1237,24 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
                 
                 temp_total_pnl = temp_bonds['pnl'].sum() + temp_els['pnl'].sum()
                 
-                # 목표 손실에 도달하면 즉시 중단
                 if temp_total_pnl <= target_pnl_raw:
                     break
 
         st.success(f"✅ DML 프록시 엔진 탐색 완료. 목표 손실({target_loss_input:,.0f}억 원)에 도달하는 최단 위기 좌표 궤적을 찾았습니다!")
 
-        # 탐색된 최종 좌표를 바탕으로 부드러운 애니메이션용 10단계 궤적 동적 생성
         steps = 10
         k_path = np.linspace(100, search_k, steps)
         s_path = np.linspace(100, search_s, steps)
         r_path = np.linspace(0, search_r, steps)
 
-        # --- 배경 지형도(Contour) 데이터 사전 연산 ---
+        # --- [수정] 배경 지형도(Contour) 데이터의 축 범위를 탐색 결과에 맞춰 동적으로 확장 ---
         grid_size = 15 
-        k_grid = np.linspace(50, 100, grid_size)
-        s_grid = np.linspace(50, 100, grid_size)
+        grid_min_k = max(0, int(search_k) - 10) # 궤적의 끝점보다 10% 더 넓게 여백 확보
+        grid_min_s = max(0, int(search_s) - 10)
+        
+        k_grid = np.linspace(min(50, grid_min_k), 100, grid_size)
+        s_grid = np.linspace(min(50, grid_min_s), 100, grid_size)
+        
         K_MESH, S_MESH = np.meshgrid(k_grid, s_grid)
         Z_PNL = np.zeros((grid_size, grid_size))
 
@@ -1265,7 +1268,7 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
 
         history_data = []
 
-        # --- 애니메이션 루프 (여기부터 부활!) ---
+        # --- 애니메이션 루프 ---
         for step in range(steps):
             current_k = k_path[step]
             current_s = s_path[step]
@@ -1292,10 +1295,10 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
                 row_data[f"E_{r['name']}"] = r['price_change'] * r['qty']
             history_data.append(row_data)
 
-            # [화면 1] 다차원 리스크 팽창 방사형 차트 (Radar)
-            risk_k = max(0, (100 - current_k) / 50 * 100)
-            risk_s = max(0, (100 - current_s) / 50 * 100)
-            risk_r = max(0, current_r / 150 * 100)
+            # --- [수정] 방사형 차트(Radar) 값이 100을 초과하여 도형이 사라지는 현상 방어 (Cap at 100) ---
+            risk_k = min(100, max(0, (100 - current_k) / 50 * 100))
+            risk_s = min(100, max(0, (100 - current_s) / 50 * 100))
+            risk_r = min(100, max(0, current_r / 150 * 100))
 
             fig_radar = go.Figure(data=go.Scatterpolar(
                 r=[risk_k, risk_s, risk_r, risk_k],
@@ -1356,7 +1359,6 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
                 df_history[col] = df_history[col].apply(lambda x: f"{x:,.0f}")
 
         st.dataframe(df_history, use_container_width=True, hide_index=True)
-
 
 
 # ==========================================
