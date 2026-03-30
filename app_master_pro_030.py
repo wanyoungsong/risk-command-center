@@ -1202,14 +1202,20 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-2. �
             mkt = base_mkt_state.copy()
             mkt['KOSPI200_Close'] *= (k_pct / 100.0)
             mkt['Samsung_Close'] *= (s_pct / 100.0)
-            mkt['SKHynix_Close'] *= (k_pct / 100.0)
+            
+            # 1. 하이닉스는 KOSPI와 삼성전자(반도체 대장)의 영향을 반반씩 받도록 수정
+            mkt['SKHynix_Close'] *= ((k_pct + s_pct) / 200.0)
             mkt['Naver_Close'] *= (k_pct / 100.0)
 
             for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']:
                 mkt[tenor] += (r_bp / 100.0)
 
-            vol_bump = (100 - k_pct) * 0.005
-            liq_drop = (100 - k_pct) * 1.5
+            # 2. 변동성(Vol)과 유동성은 KOSPI와 삼성전자 중 '더 심하게 빠진 쪽'에 연동시켜 
+            # 삼성전자가 빠져도 베가(Vega) 손실이 발생하도록 수정!
+            worst_drop = min(k_pct, s_pct) 
+            vol_bump = (100 - worst_drop) * 0.005
+            liq_drop = (100 - worst_drop) * 1.5
+            
             for key in mkt.keys():
                 if key.startswith('Vol_'): mkt[key] += vol_bump
                 elif key.endswith('_Intensity'): mkt[key] -= liq_drop
