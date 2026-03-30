@@ -700,6 +700,50 @@ def generate_batch_pipeline(user_input):
     )
     return json.loads(response.text)
 
+def analyze_incident_log(error_log):
+    """
+    에러 로그를 분석하여 지식 그래프 추론 경로(시뮬레이션)와 해결 가이드를 JSON으로 반환합니다.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    prompt = f"""
+    너는 IT 인프라 및 금융 리스크 시스템의 'L1/L2 장애 대응 AI 에이전트'야.
+    다음 [장애 로그]를 분석해서, 사내 지식 그래프(과거 해결 이력 Jira 티켓 등)에서 유사 사례를 찾았다고 가정하고 1차 대응 가이드를 기안해.
+
+    [장애 로그]
+    {error_log}
+
+    [출력 JSON 구조]
+    {{
+        "extracted_entities": "로그에서 추출한 핵심 엔티티 (예: Pricing Engine, MemoryError, ELS 등)",
+        "simulated_trace": "지식 그래프 추론 경로 (예: (ErrorLog: [에러명]) -[OCCURRED_IN]-> (Component: [컴포넌트명]) -[HAS_HISTORY]-> (Ticket: INC-[랜덤번호]))",
+        "action_plan": [
+            "조치 1: [구체적인 명령어 설정 파일 수정 등]",
+            "조치 2: [재실행 방법 등]"
+        ]
+    }}
+    """
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    )
+    return json.loads(response.text)
+
+def draft_escalation_email(error_log, action_plan):
+    """
+    1차 대응 실패 시, L3 엔지니어에게 보낼 에스컬레이션 이메일을 동적으로 작성합니다.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    prompt = f"""
+    너는 장애 1차 대응에 실패하여 L3 유지보수팀(개발팀)에 에스컬레이션 이메일을 보내는 시스템 에이전트야.
+    
+    [발생한 장애 로그]: {error_log}
+    [시도했던 1차 조치 내역]: {action_plan}
+    
+    위 내용을 바탕으로 수신자(To), 참조(CC), 제목(Subject), 장애 개요, 1차 조치 내역, 상세 요청 사항이 포함된 이메일 본문을 마크다운 형식으로 프로페셔널하게 작성해.
+    """
+    return model.generate_content(prompt).text
 
 
 
@@ -1573,11 +1617,11 @@ elif main_menu == "3. 시스템 오퍼레이션":
                     st.rerun()
 
 # ==========================================
-# [페이지 4] 지능형 장애 대응 및 시스템 복구 에이전트")
+# [페이지 4] 지능형 장애 대응 및 시스템 복구 에이전트
 # ==========================================
 elif main_menu == "4. 장애 대응 가이드 에이전트":
     st.title("🛠️ AI 장애 대응 및 유지보수 에이전트")
-    st.markdown("지식 그래프에 축적된 과거 장애 조치 이력과 시스템 로그를 분석하여, **1차 해결 가이드라인을 제공**하고 필요시 유지보수팀(L2)에 **컨텍스트 기반 호출**을 수행합니다.")
+    st.markdown("지식 그래프에 축적된 과거 장애 조치 이력과 시스템 로그를 분석하여, **1차 해결 가이드라인을 제공**하고 필요시 유지보수팀(L2/L3)에 **컨텍스트 기반 호출**을 수행합니다.")
     st.markdown("---")
 
     col1, col2 = st.columns([1, 1.5])
@@ -1586,8 +1630,7 @@ elif main_menu == "4. 장애 대응 가이드 에이전트":
     with col1:
         st.subheader("🚨 실시간 시스템 알림 (Alert)")
 
-        # 가상의 에러 발생 상황 제시
-        st.error("**[CRITICAL] 배치 작업 실패 (Pricing Engine)**\n\n발생 시간: 03:15 AM\n대상: Portfolio_ELS_Book")
+        st.error("**[CRITICAL] 시스템 장애 감지**\n\n아래 로그를 확인하고 AI 원인 분석을 요청하십시오.")
 
         error_log_input = st.text_area(
             "상세 에러 로그 확인 및 분석 요청:",
@@ -1595,84 +1638,73 @@ elif main_menu == "4. 장애 대응 가이드 에이전트":
 [TRACE] File "pricing_engine.py", line 428, in revalue_els_portfolio
 [TRACE] File "numpy/core/numeric.py", line 330, in full
 [INFO] Container memory limit (32GB) exceeded.""",
-            height=150
+            height=200
         )
 
-        if st.button("🔍 AI 원인 분석 및 해결 가이드 요청", type="primary"):
-            st.session_state.incident_step = 1
+        if st.button("🔍 AI 원인 분석 및 해결 가이드 요청", type="primary", use_container_width=True):
+            with st.spinner("지식 그래프 탐색 및 로그 분석 중..."):
+                # AI 함수 호출 및 결과 세션 저장
+                st.session_state.incident_data = analyze_incident_log(error_log_input)
+                st.session_state.error_log_text = error_log_input # 이메일 초안용으로 원본 저장
+                st.session_state.incident_step = 1
+                if 'escalation_email' in st.session_state:
+                    del st.session_state['escalation_email'] # 이전 이메일 캐시 삭제
 
     # [우측] AI 분석 및 가이드 제공 영역
     with col2:
-        if st.session_state.incident_step >= 1:
+        if st.session_state.incident_step >= 1 and 'incident_data' in st.session_state:
+            i_data = st.session_state.incident_data
+            
             st.subheader("🤖 AI 에이전트 분석 결과")
 
-            with st.status("지식 그래프 탐색 중...", expanded=True) as status:
-                st.write("1. 로그 텍스트에서 Entity 추출 중... (Pricing Engine, ELS, Out of memory)")
-                time.sleep(0.5)
-                st.write("2. 사내 조치 이력(Jira/Wiki) Ontology 매핑 중...")
-                time.sleep(0.5)
-                st.write("3. 유사 장애 패턴 (Similarity > 92%) 검색 완료.")
-                time.sleep(0.5)
-                status.update(label="분석 완료: 유사 장애 이력 3건 발견", state="complete", expanded=False)
+            with st.status("지식 그래프 탐색 완료", expanded=False) as status:
+                st.write(f"1. 로그 텍스트에서 Entity 추출 완료: **{i_data.get('extracted_entities', 'N/A')}**")
+                st.write("2. 사내 조치 이력(Jira/Wiki) Ontology 매핑 완료")
+                st.write("3. 유사 장애 패턴 검색 완료")
+                status.update(label="분석 완료: 유사 장애 이력 발견", state="complete", expanded=False)
 
-            # 지식 그래프 추론 결과 매핑
-            with st.expander("🔗 지식 그래프 추론 경로 (Traceability)", expanded=False):
-                st.code("""
-(ErrorLog: OOM) -[OCCURRED_IN]-> (Component: Pricing Engine)
-(Component: Pricing Engine) -[HAS_HISTORY]-> (Ticket: INC-2025-08)
-(Ticket: INC-2025-08) -[RESOLVED_BY]-> (Action: Increase Container Memory Limit)
-(Ticket: INC-2025-08) -[RESOLVED_BY]-> (Action: Enable Chunk Processing)
-                """, language="text")
+            # 지식 그래프 추론 결과 매핑 (동적 렌더링)
+            with st.expander("🔗 지식 그래프 추론 경로 (Traceability)", expanded=True):
+                st.code(i_data.get('simulated_trace', '추론 경로를 가져올 수 없습니다.'), language="text")
 
-            # 1차 조치 가이드라인
-            st.info("💡 **1차 대응 가이드라인 (추천도: 높음)**\n\n과거 `INC-2025-08` (25년 8월 ELS 대규모 재평가 장애) 사례와 동일한 패턴입니다. 다음 조치를 순서대로 수행해 보십시오.")
-
-            st.markdown("""
-            **조치 1.** `config/pricing_env.yaml` 파일에서 컨테이너 메모리 제한을 임시 상향 (32GB $\\rightarrow$ 64GB)
-
-            **조치 2.** 배치 파라미터 중 `CHUNK_SIZE`를 10,000에서 2,000으로 분할 설정
-
-            **조치 3.** [시스템 오퍼레이션] 메뉴에서 부분 재배치(Partial Re-run) 실행
-            """)
+            # 1차 조치 가이드라인 (동적 렌더링)
+            st.info("💡 **1차 대응 가이드라인 (추천도: 높음)**\n\n과거 유사 장애 해결 이력을 바탕으로 다음 조치를 순서대로 수행해 보십시오.")
+            
+            action_text = ""
+            for idx, action in enumerate(i_data.get('action_plan', [])):
+                st.markdown(f"**조치 {idx+1}.** {action}")
+                action_text += f"{idx+1}. {action}\n"
 
             st.markdown("---")
             st.markdown("#### 🛠️ 조치 결과 입력")
 
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("✅ 1차 조치로 해결됨 (DB 이력 저장)"):
+                if st.button("✅ 1차 조치로 해결됨 (DB 이력 저장)", use_container_width=True):
                     st.success("해결 이력이 지식 그래프에 업데이트되었습니다. 시스템이 정상화되었습니다.")
-                    st.session_state.incident_step = 0 # 초기화
+                    st.session_state.incident_step = 0 
 
             with col_b:
-                if st.button("🚨 1차 대응 실패 (유지보수팀 호출)"):
+                if st.button("🚨 1차 대응 실패 (L3 에스컬레이션)", use_container_width=True):
                     st.session_state.incident_step = 2
+                    
+                    # 1차 대응 실패 시 이메일 초안 생성 (로딩 스피너)
+                    with st.spinner("에스컬레이션 리포트 작성 중..."):
+                        if 'escalation_email' not in st.session_state:
+                            st.session_state.escalation_email = draft_escalation_email(
+                                st.session_state.error_log_text, 
+                                action_text
+                            )
 
-        # 1차 대응 실패 시: 유지보수팀 에스컬레이션 화면
-        if st.session_state.incident_step == 2:
+        # 1차 대응 실패 시: 유지보수팀 에스컬레이션 화면 (동적 이메일 렌더링)
+        if st.session_state.incident_step == 2 and 'escalation_email' in st.session_state:
             st.warning("⚠️ 1차 가이드라인으로 해결되지 않았습니다. 유지보수팀(L2/L3)으로 에스컬레이션합니다.")
 
-            st.markdown("**✉️ 자동 생성된 호출 리포트 (Draft)**")
+            st.markdown("**✉️ AI가 자동 작성한 호출 리포트 (Draft)**")
             with st.container(border=True):
-                st.markdown("""
-                **To:** 리스크 솔루션 개발팀 (dev_risk@company.com)
-                **CC:** 시스템 운영 파트장
-                **Subject:** [URGENT] Pricing Engine OOM 장애 1차 대응 실패 - 지원 요청
+                st.markdown(st.session_state.escalation_email)
 
-                **1. 장애 개요**
-                * **발생 일시:** 2026-03-23 03:15 AM
-                * **증상:** ELS Portfolio 평가 중 MemoryError 발생 (Container Limit 32GB Exceeded)
-
-                **2. 1차 대응 내역 (운영팀 조치사항)**
-                * 가이드에 따라 메모리 Limit 64GB 상향 및 Chunk Size 2000 분할을 적용 후 재시도 하였으나,
-                * **추가 에러:** `CUDA Out of Memory` 로 전이되며 다시 실패함.
-
-                **3. 요청 사항**
-                * 로직 내 메모리 누수(Leak) 또는 GPU 메모리 해제 로직 점검 요망.
-                * 즉각적인 L3 엔지니어 투입 및 디버깅을 요청합니다.
-                """)
-
-            if st.button("🚀 리포트 전송 및 엔지니어 Paging (Slack/Email 발송)"):
-                st.toast("유지보수팀 호출이 완료되었습니다. Ticket #INC-2026-03 이 생성되었습니다.")
-                time.sleep(1)
+            if st.button("🚀 리포트 전송 및 엔지니어 Paging (Slack/Email 발송)", type="primary"):
+                st.toast("유지보수팀 호출이 완료되었습니다. 신규 Jira Ticket이 생성되었습니다.")
+                time.sleep(1.5)
                 st.session_state.incident_step = 0
