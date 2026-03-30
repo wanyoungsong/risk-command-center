@@ -363,12 +363,17 @@ def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_con
         # 스트리밍 활성화
         response = model.generate_content(prompt, stream=True)
         for chunk in response:
-            if chunk.text:
-                yield chunk.text
-                time.sleep(0.01) # 스트리밍 시각적 효과를 위한 미세 딜레이
+            try:
+                # 글자가 있으면 정상적으로 반환
+                if chunk.text:
+                    yield chunk.text
+                    time.sleep(0.01) # 스트리밍 시각적 효과를 위한 미세 딜레이
+            except ValueError:
+                # 마지막 빈 껍데기 조각(finish_reason=1)이 왔을 때 발생하는 에러를 부드럽게 무시
+                pass
     except Exception as e:
         # [안전망] API 에러 시 시연 에러 방지용 메시지
-        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다. (API 키 및 네트워크 확인 필요)\n\nError: {e}"
+        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
 # --- 4. 엔진 모듈 (계속) ---
 # [신규] GraphRAG 실행 모듈 2 (Neo4j 지식 추출 및 Gemini 프롬프트 전송)
@@ -513,15 +518,18 @@ def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limi
     """
 
     try:
-        # 스트리밍 활성화
         response = model.generate_content(prompt, stream=True)
         for chunk in response:
-            if chunk.text:
-                yield chunk.text
-                time.sleep(0.01) # 스트리밍 시각적 효과를 위한 미세 딜레이
+            try:
+                # 글자가 있으면 정상적으로 반환
+                if chunk.text:
+                    yield chunk.text
+                    time.sleep(0.01)
+            except ValueError:
+                # 마지막 빈 껍데기 조각(finish_reason=1)이 왔을 때 발생하는 에러를 부드럽게 무시
+                pass
     except Exception as e:
-        # [안전망] API 에러 시 시연 에러 방지용 메시지
-        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다. (API 키 및 네트워크 확인 필요)\n\nError: {e}"
+        yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
 # --- 4. 엔진 모듈 (계속) ---
 # [신규] AI 프롬프트 함수 추가
@@ -592,9 +600,14 @@ def stream_scenario_response(total_pnl, scenario_df_json):
     try:
         response = model.generate_content(prompt, stream=True)
         for chunk in response:
-            if chunk.text:
-                yield chunk.text
-                time.sleep(0.01)
+            try:
+                # 글자가 있으면 정상적으로 반환
+                if chunk.text:
+                    yield chunk.text
+                    time.sleep(0.01)
+            except ValueError:
+                # 마지막 빈 껍데기 조각(finish_reason=1)이 왔을 때 발생하는 에러를 부드럽게 무시
+                pass
     except Exception as e:
         yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
@@ -649,9 +662,14 @@ def stream_rst_response(target_loss, k_val, s_val, r_val):
     try:
         response = model.generate_content(prompt, stream=True)
         for chunk in response:
-            if chunk.text:
-                yield chunk.text
-                time.sleep(0.01)
+            try:
+                # 글자가 있으면 정상적으로 반환
+                if chunk.text:
+                    yield chunk.text
+                    time.sleep(0.01)
+            except ValueError:
+                # 마지막 빈 껍데기 조각(finish_reason=1)이 왔을 때 발생하는 에러를 부드럽게 무시
+                pass
     except Exception as e:
         yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
