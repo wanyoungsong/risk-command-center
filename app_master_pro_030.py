@@ -655,6 +655,53 @@ def stream_rst_response(target_loss, k_val, s_val, r_val):
     except Exception as e:
         yield f"⚠️ AI 모델 통신 중 에러가 발생했습니다.\n\nError: {e}"
 
+def generate_batch_pipeline(user_input):
+    """
+    사용자의 자연어 지시를 분석하여 시스템 작업 종속성을 파악하고,
+    실행 가능한 배치 파이프라인(DAG)을 JSON 형태로 기안합니다.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    prompt = f"""
+    너는 금융기관 리스크 시스템의 '수석 IT 오퍼레이션 AI 에이전트'야.
+    사용자의 자연어 작업 지시를 분석해서 아래 JSON 형식으로만 응답해.
+
+    [시스템 구성 및 종속성 지식 (Fact)]
+    1. Data_Fetch (시장 데이터 수집)
+    2. Pricing_Engine (그릭스 산출. Data_Fetch가 선행되어야 함)
+    3. VaR_Engine (VaR 및 PnL 산출. Pricing_Engine이 선행되어야 함)
+    4. Report_Gen (보고서 생성. VaR_Engine이 선행되어야 함)
+    * 사용자가 후행 작업만 지시하더라도, 필수 선행 작업이 누락되었다면 네가 알아서 파이프라인 앞단에 추가해야 해.
+
+    [사용자 지시]
+    {user_input}
+
+    [지시사항]
+    1. 지시가 리스크 시스템 배치 작업과 관련이 없다면 "is_valid"를 false로 하고 "error_msg"에 정중한 거절 사유를 적어.
+    2. 관련이 있다면 대상 포트폴리오, 시작/종료일, 예상 소요 시간, 그리고 논리적 순서에 맞게 구성된 작업 스텝(inferred_tasks)을 작성해.
+
+    [출력 JSON 구조]
+    {{
+        "is_valid": true/false,
+        "error_msg": "관련 없을 경우 에러 메시지",
+        "target_portfolio": "예: PORT_D",
+        "date_range": "예: 26.01.15 ~ 26.02.14",
+        "est_time_minutes": 45,
+        "inferred_tasks": [
+            {{"step": 1, "task": "Data Fetch", "desc": "시장 데이터 검증", "is_auto_added": true}},
+            {{"step": 2, "task": "Pricing Engine", "desc": "그릭스 재산출", "is_auto_added": false}}
+        ]
+    }}
+    """
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    )
+    return json.loads(response.text)
+
+
+
 
 # --- 5. 실시간 연산 (T-1 vs T) ---
 # 어제(Day 28) 대비 오늘(Day 29)의 일간 변화를 측정
@@ -1475,48 +1522,53 @@ elif main_menu == "3. 시스템 오퍼레이션":
             value="26.01.15부터 26.02.14까지 포트폴리오 D에 대한 재배치를 돌리고, 각 날짜별 보고서 생성 작업도 다시 돌려줘."
         )
 
-        if st.button("AI 파이프라인 기안 (Draft) 생성 🚀"):
-            with st.spinner("자연어 분석 및 종속성(Dependency) 파악 중..."):
-                time.sleep(1.2)
-                st.session_state.batch_step = 1
+        if st.button("AI 파이프라인 기안 (Draft) 생성 🚀", use_container_width=True):
+            with st.spinner("자연어 분석 및 작업 종속성(Dependency) 파악 중..."):
+                result = generate_batch_pipeline(user_input)
+                
+                if result.get("is_valid"):
+                    st.session_state.batch_data = result
+                    st.session_state.batch_step = 1
+                else:
+                    st.session_state.batch_step = 0
+                    st.error(f"⚠️ {result.get('error_msg', '시스템 배치 작업과 관련된 지시가 아닙니다.')}")
 
-        if st.session_state.batch_step == 1:
+        if st.session_state.batch_step == 1 and 'batch_data' in st.session_state:
+            b_data = st.session_state.batch_data
+            
             st.success("✅ 시스템 파라미터 매핑 및 작업 종속성 검증 완료")
 
-            with st.expander("🔍 AI 파라미터 추출 결과 (시스템 매핑)", expanded=True):
-                st.code('''
-                {
-                  "intent": "RE-RUN_BATCH_AND_REPORT",
-                  "target_portfolio": "PORT_D",
-                  "date_range": {"start": "2026-01-15", "end": "2026-02-14"},
-                  "required_engines": ["Pricing", "VaR", "Report_Gen"],
-                  "days_count": 31
-                }
-                ''', language='json')
+            with st.expander("🔍 AI 파라미터 추출 결과 (시스템 매핑)", expanded=False):
+                # AI가 만든 JSON을 예쁘게 출력
+                st.json({
+                    "target_portfolio": b_data.get("target_portfolio"),
+                    "date_range": b_data.get("date_range"),
+                    "inferred_tasks_count": len(b_data.get("inferred_tasks", []))
+                })
 
             st.markdown("### 📋 AI 기안: 자동 생성된 작업 파이프라인(DAG)")
-            st.info('''
-            💡 **AI 시스템 알림:** 요청하신 '보고서 생성'을 위해서는 필수 선행 작업이 필요합니다.
-            AI가 시스템 종속성을 파악하여 **누락된 선행 엔진 구동을 자동으로 파이프라인에 추가**했습니다.
-            ''')
+            
+            # 자동 추가된 작업이 있는지 검사
+            has_auto_added = any(task.get("is_auto_added", False) for task in b_data.get("inferred_tasks", []))
+            if has_auto_added:
+                st.info("💡 **AI 시스템 알림:** 요청하신 작업을 수행하기 위해 필요한 **필수 선행 작업을 AI가 파악하여 파이프라인에 자동으로 추가**했습니다.")
 
-            st.markdown("""
-            1. 🔄 **[Data Fetch]** 26.01.15 ~ 26.02.14 구간 'PORT_D' 기초자산 및 시장 데이터 검증 (자동 추가됨)
-            2. 🧮 **[Pricing Engine]** 31일치 개별 상품 민감도(Greeks) 재산출
-            3. 📈 **[VaR Engine]** 31일치 포트폴리오 통합 VaR 및 P&L 재산출
-            4. 📊 **[Report Gen]** 31개 일일 리스크 브리핑 보고서 PDF 생성 및 DB 아카이빙
-            """)
+            # 동적으로 파이프라인 스텝 렌더링
+            for task in b_data.get("inferred_tasks", []):
+                icon = "🔄" if task["task"] == "Data Fetch" else "🧮" if "Pricing" in task["task"] else "📈" if "VaR" in task["task"] else "📊"
+                auto_badge = " *(AI 자동 추가됨)*" if task.get("is_auto_added") else ""
+                st.markdown(f"**{task['step']}. {icon} [{task['task']}]** {task['desc']}{auto_badge}")
 
-            st.warning("⏱️ **예상 소요 시간:** 약 45분 / 🖥️ **시스템 부하 예상:** 중간(Medium)")
+            st.warning(f"⏱️ **예상 소요 시간:** 약 {b_data.get('est_time_minutes', 30)}분 / 🖥️ **시스템 부하 예상:** 중간(Medium)")
 
             st.markdown("---")
             st.markdown("#### 👨‍⚖️ 최종 승인 (Human-in-the-loop)")
             col2_1, col2_2 = st.columns(2)
             with col2_1:
-                if st.button("✅ 기안 승인 및 배치 실행"):
-                    st.toast("배치 작업이 안전하게 스케줄링 되었습니다.")
+                if st.button("✅ 기안 승인 및 배치 실행", type="primary", use_container_width=True):
+                    st.toast("배치 작업이 안전하게 Airflow에 스케줄링 되었습니다! 🚀")
             with col2_2:
-                if st.button("❌ 기안 반려 (재입력)"):
+                if st.button("❌ 기안 반려 (재입력)", use_container_width=True):
                     st.session_state.batch_step = 0
                     st.rerun()
 
