@@ -1,3 +1,4 @@
+%%writefile app_master_pro_030.py
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -917,6 +918,8 @@ elif main_menu == "2. 스트레스 테스트 데스크" and sub_menu == "2-1. �
     st.subheader("▶ 매크로 위기 시나리오 분석 (Forward WHAT-IF)")
     st.markdown("---")
 
+    col_left, col_right = st.columns([1.2, 1.8])
+    
     with col_left:
         st.markdown("#### a. 시나리오 설정 (자연어 지시)")
         scenario_prompt = st.text_area(
