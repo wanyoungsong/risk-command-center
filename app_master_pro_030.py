@@ -334,9 +334,9 @@ def _fallback_kg_context(risk_driver):
 def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
     """
     수학 엔진의 정량적 결과와 지식그래프의 온톨로지 지식을 결합하여
-    gemini-2.5-flash 모델에게 경영진 브리핑 스트리밍 출력을 요청하는 제너레이터 함수
+    gemini-3.1-flash-lite 모델에게 경영진 브리핑 스트리밍 출력을 요청하는 제너레이터 함수
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
@@ -492,9 +492,9 @@ def _fallback_compliance_context(dept_code, usage_pct):
 def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limit_amt, kg_context):
     """
     수학 엔진의 한도 소진 결과와 지식그래프의 컴플라이언스 지식을 결합하여
-    gemini-2.5-flash 모델에게 AI 처방전 스트리밍 출력을 요청하는 제너레이터 함수
+    gemini-3.1-flash-lite 모델에게 AI 처방전 스트리밍 출력을 요청하는 제너레이터 함수
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
@@ -540,7 +540,7 @@ def generate_dynamic_scenario(user_input):
     사용자의 자연어 시나리오를 받아 관련성을 판단하고,
     유효한 경우에만 JSON 형태로 파라미터를 추출합니다.
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     prompt = f"""
     너는 금융기관 최고경영진(Senior Management)에게 시장 상황을 보고하는 '수석 리스크 AI 참모'야.
@@ -581,7 +581,7 @@ def stream_scenario_response(total_pnl, scenario_df_json):
     시뮬레이션 완료 후 최종 손익과 시나리오 파라미터를 바탕으로
     사내 규정 기반 대응 방안을 스트리밍합니다.
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
@@ -643,7 +643,7 @@ def stream_rst_response(target_loss, k_val, s_val, r_val):
     RST(역스트레스 테스트) 탐색 완료 후, 도출된 최악의 팩터 조합을 바탕으로
     경영진 보고용 시사점을 실시간 스트리밍합니다.
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     prompt = f"""
     너는 금융기관 최고리스크책임자(CRO)를 보좌하는 '수석 리스크 AI 참모'야.
@@ -679,7 +679,7 @@ def generate_batch_pipeline(user_input, kg_context):
     사용자의 자연어 지시와 사내 지식 그래프(Neo4j)의 작업 종속성을 파악하여,
     실행 가능한 배치 파이프라인(DAG)을 JSON 형태로 기안합니다.
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
     
     prompt = f"""
     너는 금융기관 리스크 시스템의 '수석 IT 오퍼레이션 AI 에이전트'야.
@@ -763,7 +763,7 @@ def analyze_incident_log(error_log):
     """
     에러 로그를 분석하여 지식 그래프 추론 경로(시뮬레이션)와 해결 가이드를 JSON으로 반환합니다.
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     prompt = f"""
     너는 IT 인프라 및 금융 리스크 시스템의 'L1/L2 장애 대응 AI 에이전트'야.
@@ -793,7 +793,7 @@ def draft_escalation_email(error_log, action_plan):
     """
     1차 대응 실패 시, L3 엔지니어에게 보낼 에스컬레이션 이메일을 동적으로 작성합니다.
     """
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
     prompt = f"""
     너는 장애 1차 대응에 실패하여 L3 유지보수팀(개발팀)에 에스컬레이션 이메일을 보내는 시스템 에이전트야.
 
@@ -959,14 +959,14 @@ if main_menu == "1. 전사 리스크 대시보드" and sub_menu == "1-1. 전사 
     # Bottom Tier: AI 지식 그래프 & 서술형 리포트
     st.markdown("---")
     st.markdown("#### 📝 AI 참모 원인 규명 및 대응 권고 리포트 (GraphRAG 기반)")
-    st.caption("수학 엔진의 정량적 연산 결과(Fact)와 사내 지식 그래프(Neo4j Aura)의 온톨로지 지식(사내 규정 및 인과관계)을 결합하여 gemini-2.5-flash 모델이 실시간으로 경영진 보고서를 작성합니다.")
+    st.caption("수학 엔진의 정량적 연산 결과(Fact)와 사내 지식 그래프(Neo4j Aura)의 온톨로지 지식(사내 규정 및 인과관계)을 결합하여 gemini-3.1-flash-lite 모델이 실시간으로 경영진 보고서를 작성합니다.")
 
     # UI 레이아웃 분리 (리포트 텍스트 vs 리니지 맵)
     col_b1, col_b2 = st.columns([1.5, 1.5])
 
     with col_b1:
         # AI 브리핑 생성 버튼
-        if st.button("✨ 경영진 보고용 실시간 AI 브리핑 생성 (gemini-2.5-flash)", type="primary", use_container_width=True):
+        if st.button("✨ 경영진 보고용 실시간 AI 브리핑 생성 (gemini-3.1-flash-lite)", type="primary", use_container_width=True):
             with st.spinner("지식 그래프 쿼리 및 AI 참모 추론 중..."):
                 # 1. Neo4j 지식 그래프에서 사내 규정 컨텍스트 조회
                 kg_context = get_knowledge_graph_context(top_risk_driver)
