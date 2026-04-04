@@ -276,10 +276,23 @@ def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limi
 
 def generate_dynamic_scenario(user_input):
     model = genai.GenerativeModel('gemini-2.5-flash')
-    prompt = f"""너는 AI 참모야. 다음 [사용자 입력]을 분석해 JSON으로 응답해.
+    prompt = f"""너는 금융기관 수석 리스크 AI 참모야. 다음 [사용자 입력]을 분석해 JSON으로 응답해.
     입력: {user_input}
-    지시: 관련 없으면 is_relevant: false, rag_summary에 거절 메시지 작성. 관련 있으면 true로 하고 파라미터 추출.
-    JSON 구조: {{"is_relevant": true/false, "rag_summary": "시황요약", "kg_logic": "인과관계", "parameters": [{{"factor": "KOSPI 200 지수", "current": "100%", "target": "75%", "duration": "14일"}}]}}"""
+    
+    [필수 지시사항]
+    사용자가 '유가 급등' 등 특정 이슈만 언급하더라도, 반드시 그 파급 효과를 추론하여 우리 엔진의 3대 핵심 팩터인 'KOSPI 200 지수', '삼성전자 주가', '국채/회사채 금리'에 대한 파라미터를 모두 생성해.
+    
+    JSON 구조 예시: 
+    {{
+        "is_relevant": true, 
+        "rag_summary": "시황요약", 
+        "kg_logic": "인과관계", 
+        "parameters": [
+            {{"factor": "KOSPI 200 지수", "current": "100%", "target": "75%", "duration": "14일"}},
+            {{"factor": "삼성전자 주가", "current": "100%", "target": "70%", "duration": "14일"}},
+            {{"factor": "국채/회사채 금리", "current": "Base Rate", "target": "+100 bp", "duration": "14일"}}
+        ]
+    }}"""
     response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
     return json.loads(response.text)
 
