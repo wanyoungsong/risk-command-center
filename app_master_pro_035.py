@@ -440,7 +440,7 @@ with col_chat:
                             fig.add_trace(go.Scatter3d(x=traj_x[:i+1], y=traj_y[:i+1], z=traj_z[:i+1], mode='lines', line=dict(color='orange', width=6)))
                             fig.add_trace(go.Scatter3d(x=[traj_x[i]], y=[traj_y[i]], z=[traj_z[i]], mode='markers', marker=dict(size=10, color='red')))
                             fig.update_layout(title=f"⏳ 진행 상태: Step {i+1}", height=450, margin=dict(l=0,r=0,b=0,t=30))
-                            chart_place.plotly_chart(fig, use_container_width=True)
+                            chart_place.plotly_chart(fig, use_container_width=True, key=f"sim_anim_{i}")
                             time.sleep(0.5)
                         st.session_state.scenario_fig = fig
 
@@ -473,13 +473,13 @@ with col_chat:
                             fill='toself', line=dict(color='red', width=2)
                         ))
                         fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), height=350, margin=dict(l=30,r=30,t=30,b=30))
-                        radar_ph.plotly_chart(fig_radar, use_container_width=True)
+                        radar_ph.plotly_chart(fig_radar, use_container_width=True, key=f"radar_anim_{step}")
 
                         K_MESH, S_MESH = np.meshgrid(np.linspace(50, 100, 10), np.linspace(50, 100, 10))
                         fig_contour = go.Figure(data=go.Contour(z=(K_MESH+S_MESH), x=np.linspace(50,100,10), y=np.linspace(50,100,10), colorscale='RdBu'))
                         fig_contour.add_trace(go.Scatter(x=k_path[:step+1], y=s_path[:step+1], mode='lines+markers', line=dict(color='#00FF00', width=4)))
                         fig_contour.update_layout(height=350, margin=dict(l=30,r=30,t=30,b=30))
-                        contour_ph.plotly_chart(fig_contour, use_container_width=True)
+                        contour_ph.plotly_chart(fig_contour, use_container_width=True, key=f"contour_anim_{step}")
                         time.sleep(0.5)
                         
                     st.session_state.rst_radar = fig_radar
@@ -536,7 +536,7 @@ with viz_container:
     elif "2-1" in selected_mode:
         if 'scenario_fig' in st.session_state:
             st.subheader("시뮬레이션 궤적 시각화")
-            st.plotly_chart(st.session_state.scenario_fig, use_container_width=True)
+            st.plotly_chart(st.session_state.scenario_fig, use_container_width=True, key="sim_final_chart")
         else:
             st.info("👈 좌측 대화창에 위기 시나리오를 자연어로 지시해 주십시오.")
 
@@ -544,7 +544,7 @@ with viz_container:
         if 'rst_radar' in st.session_state:
             st.subheader("역위기상황(RST) 탐색 지형도")
             cr1, cr2 = st.columns(2)
-            cr1.plotly_chart(st.session_state.rst_radar, use_container_width=True)
-            cr2.plotly_chart(st.session_state.rst_contour, use_container_width=True)
+            cr1.plotly_chart(st.session_state.rst_radar, use_container_width=True, key="radar_final_chart")
+            cr2.plotly_chart(st.session_state.rst_contour, use_container_width=True, key="contour_final_chart")
         else:
             st.info("👈 좌측 대화창에 도달하고자 하는 목표 손실액을 지시해 주십시오.")
