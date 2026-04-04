@@ -348,6 +348,16 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"System Status: {'Warning' if var_usage_pct > 90 else 'Normal'}")
 
+# ==========================================
+# (여기에 아래 5줄을 복사해서 붙여넣어 줘!)
+if 'scenario_step' not in st.session_state:
+    st.session_state.scenario_step = 0
+if 'rst_step' not in st.session_state:
+    st.session_state.rst_step = 0
+if 'target_loss' not in st.session_state:
+    st.session_state.target_loss = -400.0
+# ==========================================
+
 # -----------------
 # 메인 레이아웃 분할 (Center: Chat, Right: Viz)
 # -----------------
