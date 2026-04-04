@@ -255,7 +255,7 @@ def _fallback_compliance_context(dept_code, usage_pct):
     return "✅ 정상 범위"
 
 def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""너는 최고리스크책임자(CRO)를 보좌하는 수석 리스크 AI 참모야. 아래 팩트를 바탕으로 브리핑을 작성해.
     [데이터] 일간 P&L: {total_pnl/100000000:,.1f}억, ELS P&L: {els_pnl/100000000:,.1f}억, 채권 P&L: {bond_pnl/100000000:,.1f}억, 핵심동인: {top_driver}, VaR소진율: {var_pct:.1f}%
     [온톨로지 규정] {kg_context}
@@ -266,7 +266,7 @@ def stream_ai_briefing(total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_con
             time.sleep(0.01)
 
 def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limit_amt, kg_context):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""너는 수석 리스크 AI 참모야. 아래 부서별 한도 초과 상황에 대한 처방을 내려.
     [현황] 부서: {dept_name}, 지표: {metric_name}, 노출도: {exposure_amt:,.1f}억, 한도: {limit_amt:,.1f}억 (소진율 {usage_pct:.1f}%)
     [지침] {kg_context}
@@ -275,7 +275,7 @@ def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limi
         if chunk.text: yield chunk.text
 
 def generate_dynamic_scenario(user_input):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""너는 금융기관 수석 리스크 AI 참모야. 다음 [사용자 입력]을 분석해 JSON으로 응답해.
     입력: {user_input}
     
@@ -297,13 +297,13 @@ def generate_dynamic_scenario(user_input):
     return json.loads(response.text)
 
 def stream_scenario_response(total_pnl, scenario_df_json):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""너는 AI 참모야. 시뮬레이션 결과(파라미터: {scenario_df_json}, 최대손실: {total_pnl/100000000:,.1f}억)를 바탕으로 ELS 및 채권 데스크의 즉각적 액션 플랜을 사내 규정(가상)을 근거로 제시해."""
     for chunk in model.generate_content(prompt, stream=True):
         if chunk.text: yield chunk.text
 
 def stream_rst_response(target_loss, k_val, s_val, r_val):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""너는 AI 참모야. 목표손실 {target_loss:,.0f}억 역산 결과 (KOSPI: {k_val:.1f}%, 삼성전자: {s_val:.1f}%, 금리: {r_val:.0f}bp 충격)에 대한 경영진 시사점을 작성해."""
     for chunk in model.generate_content(prompt, stream=True):
         if chunk.text: yield chunk.text
