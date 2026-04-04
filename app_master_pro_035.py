@@ -332,52 +332,38 @@ rho_exposure_bn = var_sens.filter(like='KTB').sum() / 100000000
 vega_exposure_bn = var_sens.filter(like='Vol').sum() / 100000000
 dynamic_limits = get_dynamic_risk_limits()
 
-# -----------------
-# Left Panel: Sidebar
-# -----------------
+# ---------------------------------------------------------
+# [수정 1] 상단 세션 초기화 부분 (모든 모드의 상태를 미리 준비)
+# ---------------------------------------------------------
+modes = [
+    "📊 1-1. 마켓 리스크 브리핑", 
+    "🚨 1-2. 부서별 한도 관리", 
+    "▶️ 2-1. 위기 시나리오 분석", 
+    "◀️ 2-2. 역방향 위기 탐색"
+]
+
+# 메뉴를 옮겨 다녀도 대화(msgs)와 화면 단계(step)가 날아가지 않게 각각 생성
+for m in modes:
+    if f"msgs_{m}" not in st.session_state: 
+        st.session_state[f"msgs_{m}"] = []
+    if f"step_{m}" not in st.session_state: 
+        st.session_state[f"step_{m}"] = 0
+
+if 'target_loss' not in st.session_state: 
+    st.session_state.target_loss = -400.0
+
+# ---------------------------------------------------------
+# [수정 2] Left Panel: Sidebar (메뉴 선택 시 초기화 로직 삭제)
+# ---------------------------------------------------------
 with st.sidebar:
     st.title("🤖 Risk Agent")
     st.caption("AI 기반 전사 리스크 지휘소")
     st.markdown("---")
     
-    selected_mode = st.radio("업무 모드 선택", [
-        "📊 1-1. 마켓 리스크 브리핑",
-        "🚨 1-2. 부서별 한도 관리",
-        "▶️ 2-1. 위기 시나리오 분석",
-        "◀️ 2-2. 역방향 위기 탐색"
-    ])
+    selected_mode = st.radio("업무 모드 선택", modes)
     
-    # 모드 변경 시 세션 초기화
-    if 'current_mode' not in st.session_state:
-        st.session_state.current_mode = selected_mode
-        st.session_state.messages = []
-    elif st.session_state.current_mode != selected_mode:
-        st.session_state.current_mode = selected_mode
-        st.session_state.messages = []
-        
-        # [핵심 에러 해결] 메뉴 이동 시 스텝 무조건 0으로 리셋!
-        st.session_state.scenario_step = 0
-        st.session_state.rst_step = 0
-        
-        # 기억 장치 비우기
-        if 'scenario_fig' in st.session_state: del st.session_state['scenario_fig']
-        if 'rst_radar' in st.session_state: del st.session_state['rst_radar']
-        if 'rst_contour' in st.session_state: del st.session_state['rst_contour']
-        if 'rst_history' in st.session_state: del st.session_state['rst_history']
-        if 'final_sim_pnl' in st.session_state: del st.session_state['final_sim_pnl']
-
     st.markdown("---")
     st.caption(f"System Status: {'Warning' if var_usage_pct > 90 else 'Normal'}")
-
-# ==========================================
-# (여기에 아래 5줄을 복사해서 붙여넣어 줘!)
-if 'scenario_step' not in st.session_state:
-    st.session_state.scenario_step = 0
-if 'rst_step' not in st.session_state:
-    st.session_state.rst_step = 0
-if 'target_loss' not in st.session_state:
-    st.session_state.target_loss = -400.0
-# ==========================================
 
 # -----------------
 # 메인 레이아웃 분할 (Center: Chat, Right: Viz)
@@ -387,52 +373,52 @@ col_chat, col_viz = st.columns([1.3, 1.7], gap="large")
 # -----------------
 # Center Panel: Chat Logic
 # -----------------
+# (이하 생략 없이 파일의 맨 끝까지 아래 코드로 전부 덮어쓰세요)
+curr_msgs = st.session_state[f"msgs_{selected_mode}"]
+curr_step_key = f"step_{selected_mode}"
+
 with col_chat:
     st.subheader(f"{selected_mode.split('. ')[1]}")
     
-    if not st.session_state.messages:
-        if "1-1" in selected_mode:
-            st.session_state.messages.append({"role": "assistant", "content": "전사 마켓 리스크 현황이 우측 대시보드에 업데이트되었습니다. 경영진 보고용 시황 브리핑이 필요하시면 지시해 주십시오."})
-        elif "1-2" in selected_mode:
-            st.session_state.messages.append({"role": "assistant", "content": "부서별 리스크 한도 모니터링 중입니다. 처방전 기안이 필요하면 지시해 주십시오."})
-        elif "2-1" in selected_mode:
-            st.session_state.messages.append({"role": "assistant", "content": "거시 경제 위기 시나리오를 지시해 주십시오. (예: '전쟁 확전으로 유가가 급등하는 상황 분석해줘')"})
-        elif "2-2" in selected_mode:
-            st.session_state.messages.append({"role": "assistant", "content": "경영진이 우려하는 목표 손실액을 입력해 주시면 최악의 위기 경로를 역산합니다. (예: '목표손실 -400억 찾아줘')"})
+    # 초기 인사말 (기존 대화 없을 때만)
+    if not curr_msgs:
+        intro = "무엇을 도와드릴까요?"
+        if "1-1" in selected_mode: intro = "전사 마켓 리스크 현황이 우측 대시보드에 업데이트되었습니다. 경영진 보고용 시황 브리핑이 필요하시면 지시해 주십시오."
+        elif "1-2" in selected_mode: intro = "부서별 리스크 한도 모니터링 중입니다. 한도 초과에 대한 처방전 기안이 필요하면 지시해 주십시오."
+        elif "2-1" in selected_mode: intro = "거시 경제 위기 시나리오를 지시해 주십시오. (예: '전쟁 확전으로 유가가 급등하는 상황 분석해줘')"
+        elif "2-2" in selected_mode: intro = "경영진이 우려하는 목표 손실액을 입력해 주시면 최악의 위기 경로를 역산합니다. (예: '목표손실 -400억 경로 찾아줘')"
+        curr_msgs.append({"role": "assistant", "content": intro})
 
-    for msg in st.session_state.messages:
+    for msg in curr_msgs:
         st.chat_message(msg["role"]).write(msg["content"])
 
-    # ---------------------------------------------------------
-    # [동기화 로직 1] 우측 캔버스에서 시뮬레이션(Step 2)이 끝난 직후 AI 브리핑 호출!
-    if "2-1" in selected_mode and st.session_state.scenario_step == 3:
+    # 시뮬레이션 종료 후 AI 브리핑 자동 연동 (2-1 모드 전용)
+    if "2-1" in selected_mode and st.session_state[curr_step_key] == 3:
         with st.chat_message("assistant"):
-            st.markdown("🚨 **시뮬레이션 종료. 결과를 바탕으로 대응 방안을 브리핑합니다.**")
+            st.markdown("🚨 **시뮬레이션 분석 결과를 브리핑합니다.**")
             df_json = st.session_state.final_scenario_df.to_dict(orient="records")
             response = st.write_stream(stream_scenario_response(st.session_state.final_sim_pnl, df_json))
-            st.session_state.messages.append({"role": "assistant", "content": f"🚨 [시뮬레이션 분석 결과]\n\n{response}"})
-            st.session_state.scenario_step = 4 # 브리핑 반복 방지
+            curr_msgs.append({"role": "assistant", "content": f"🚨 [시뮬레이션 분석 결과]\n\n{response}"})
+            st.session_state[curr_step_key] = 4
 
-    # [동기화 로직 2] 역방향 탐색이 끝난 직후 AI 브리핑 호출!
-    if "2-2" in selected_mode and st.session_state.rst_step == 2:
+    # RST 종료 후 AI 브리핑 자동 연동 (2-2 모드 전용)
+    if "2-2" in selected_mode and st.session_state[curr_step_key] == 2:
         with st.chat_message("assistant"):
-            st.markdown("🚨 **역방향 위기 탐색 종료. 경영진 시사점을 브리핑합니다.**")
-            final_k, final_s, final_r = st.session_state.rst_final_factors
-            response = st.write_stream(stream_rst_response(st.session_state.target_loss, final_k, final_s, final_r))
-            st.session_state.messages.append({"role": "assistant", "content": f"🚨 [RST 분석 결과]\n\n{response}"})
-            st.session_state.rst_step = 3 # 브리핑 반복 방지
-    # ---------------------------------------------------------
+            st.markdown("🚨 **역방향 위기 탐색 결과를 브리핑합니다.**")
+            fk, fs, fr = st.session_state.rst_final_factors
+            response = st.write_stream(stream_rst_response(st.session_state.target_loss, fk, fs, fr))
+            curr_msgs.append({"role": "assistant", "content": f"🚨 [RST 분석 결과]\n\n{response}"})
+            st.session_state[curr_step_key] = 3
 
-    # 사용자 프롬프트 입력
     if prompt := st.chat_input("AI 참모에게 지시를 입력하세요..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        curr_msgs.append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
             if "1-1" in selected_mode:
                 kg_context = get_knowledge_graph_context(top_risk_driver)
-                response = st.write_stream(stream_ai_briefing(daily_total_pnl, daily_els_pnl, daily_bond_pnl, top_risk_driver, var_usage_pct, kg_context))
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                res = st.write_stream(stream_ai_briefing(daily_total_pnl, daily_els_pnl, daily_bond_pnl, top_risk_driver, var_usage_pct, kg_context))
+                curr_msgs.append({"role": "assistant", "content": res})
 
             elif "1-2" in selected_mode:
                 dept_code, dept_name, usage, metric, exp, limit = 'ENTERPRISE', '전사 통합 리스크 위원회', var_usage_pct, '전사 VaR', var_amount/100000000, dynamic_limits.get("전사 VaR 한도", 1500)
@@ -442,37 +428,34 @@ with col_chat:
                     dept_code, dept_name, usage, metric, exp, limit = 'ELS_DESK', 'ELS 운용 데스크', abs(vega_exposure_bn/dynamic_limits.get("변동성 민감도(Vega) 한도", 30))*100, 'Vega', vega_exposure_bn, dynamic_limits.get("변동성 민감도(Vega) 한도", 30)
                 
                 kg_context = get_compliance_graph_context(dept_code, usage)
-                response = st.write_stream(stream_ai_prescription(dept_name, usage, metric, exp, limit, kg_context))
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                res = st.write_stream(stream_ai_prescription(dept_name, usage, metric, exp, limit, kg_context))
+                curr_msgs.append({"role": "assistant", "content": res})
 
             elif "2-1" in selected_mode:
                 with st.spinner("시나리오 파라미터 추론 중..."):
-                    result = generate_dynamic_scenario(prompt)
-                
-                if not result.get("is_relevant"):
-                    response = result.get("rag_summary", "관련성 없음")
-                    st.write(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                else:
-                    st.session_state.scenario_data = result
-                    st.session_state.scenario_step = 1
+                    res = generate_dynamic_scenario(prompt)
+                if res.get("is_relevant"):
+                    st.session_state.scenario_data = res
+                    st.session_state[curr_step_key] = 1
                     msg = "🔍 [AI 파라미터 추출 완료] 우측 화면에서 파라미터를 검토하고 승인 버튼을 눌러주십시오."
                     st.write(msg)
-                    st.session_state.messages.append({"role": "assistant", "content": msg})
+                    curr_msgs.append({"role": "assistant", "content": msg})
                     st.rerun()
+                else:
+                    st.write(res.get("rag_summary"))
+                    curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
 
             elif "2-2" in selected_mode:
                 nums = re.findall(r'-?\d+', prompt)
-                target_loss = float(nums[0]) if nums else -400.0
-                st.session_state.target_loss = target_loss
-                st.session_state.rst_step = 1
-                msg = f"🔍 목표 손실 **{target_loss}억 원**을 유발하는 최단 위기 경로 탐색을 시작합니다. 우측 화면을 확인해 주십시오."
+                st.session_state.target_loss = float(nums[0]) if nums else -400.0
+                st.session_state[curr_step_key] = 1
+                msg = f"🔍 목표 손실 **{st.session_state.target_loss}억 원**을 유발하는 최단 위기 경로 탐색을 시작합니다. 우측 화면을 확인해 주십시오."
                 st.write(msg)
-                st.session_state.messages.append({"role": "assistant", "content": msg})
+                curr_msgs.append({"role": "assistant", "content": msg})
                 st.rerun()
 
 # -----------------
-# Right Panel: Visualization Render
+# Right Panel: Visualization Render (우측 캔버스 동적 렌더링)
 # -----------------
 with col_viz:
     if "1-1" in selected_mode:
@@ -487,7 +470,7 @@ with col_viz:
         df_summary = pd.DataFrame({"포트폴리오": ["채권 (Long)", "ELS (자체헤지)"], "Delta": [f"{rho_exposure_bn:,.1f}억", "0.0억(헤지)"], "Net P&L": [f"{daily_bond_pnl/100000000:,.1f}억", f"{daily_els_pnl/100000000:,.1f}억"]})
         st.dataframe(df_summary, use_container_width=True, hide_index=True)
 
-        st.markdown("#### 🕸️ 리스크 파급 인과관계 맵")
+        st.markdown("#### 🕸️ 리스크 파급 인과관계 맵 (Knowledge Graph)")
         net = Network(height='300px', width='100%', bgcolor='#ffffff')
         net.add_node("M", label=f"{top_risk_driver}\n충격", color="#ffb3b3", size=25)
         net.add_node("B", label="채권 포트", color="#cce5ff")
@@ -516,10 +499,11 @@ with col_viz:
             st.progress(min(vega_usage/100, 1.0), text=f"Vega 한도: {vega_usage:.1f}%")
             
     elif "2-1" in selected_mode:
-        if st.session_state.scenario_step == 0:
+        step = st.session_state[curr_step_key]
+        if step == 0:
             st.info("👈 좌측 대화창에 위기 시나리오를 자연어로 지시해 주십시오.")
         
-        elif st.session_state.scenario_step >= 1:
+        elif step == 1:
             s_data = st.session_state.scenario_data
             st.subheader("📝 시나리오 파라미터 검토 및 승인")
             
@@ -530,10 +514,10 @@ with col_viz:
             
             if st.button("✅ 기안 승인 및 Full Revaluation 실행", type="primary"):
                 st.session_state.final_scenario_df = edited_df
-                st.session_state.scenario_step = 2
+                st.session_state[curr_step_key] = 2
                 st.rerun()
                 
-        if st.session_state.scenario_step == 2:
+        elif step == 2:
             st.markdown("---")
             st.subheader("📈 시계열 파급 분석 (Time-Step Full Revaluation)")
             chart_placeholder = st.empty()
@@ -566,6 +550,8 @@ with col_viz:
             df_bonds_scaled = df_bonds.copy()
             df_bonds_scaled['qty'] = df_bonds_scaled['qty'] * 100
             final_total_pnl = 0
+            
+            scen_history = [] # 20종목 P&L 상세 데이터 기록용
 
             for i in range(steps_count):
                 fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='Blues', opacity=0.7)])
@@ -585,29 +571,44 @@ with col_viz:
                 sim_els = revalue_els_multi(df_els, curr_mkt, base_mkt_state)
                 final_total_pnl = sim_bonds['pnl'].sum() + sim_els['pnl'].sum()
 
+                # 20종목 상세 데이터 표에 담기
+                row_data = {
+                    "단계": time_labels[i],
+                    "KOSPI 잔존": f"{traj_x[i]:.1f}%",
+                    "삼성전자 잔존": f"{traj_y[i]:.1f}%",
+                    "금리 충격": f"+{rate_shocks[i]:.0f} bp"
+                }
+                for _, r in sim_bonds.iterrows(): row_data[f"B_{r['name']}"] = f"{r['pnl']:,.0f}"
+                for _, r in sim_els.iterrows(): row_data[f"E_{r['name']}"] = f"{r['pnl']:,.0f}"
+                scen_history.append(row_data)
+
                 with metrics_placeholder.container():
                     st.markdown(f"**실시간 통합 평가 손익:** `<span style='color:red;'>{final_total_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
                 time.sleep(0.5)
 
             # 시뮬레이션 종료 후 차트 고정 및 상태 업데이트 (채팅창 브리핑 트리거)
+            st.session_state.scen_history = scen_history
             st.session_state.scenario_fig = fig
             st.session_state.final_sim_pnl = final_total_pnl
-            st.session_state.scenario_step = 3
+            st.session_state[curr_step_key] = 3
             st.rerun()
 
-        elif st.session_state.scenario_step >= 3:
+        elif step >= 3:
             st.markdown("---")
             st.subheader("📈 시계열 파급 분석 (종료)")
-            # 안전장치 추가
             if 'scenario_fig' in st.session_state:
                 st.plotly_chart(st.session_state.scenario_fig, use_container_width=True, key="sim_final")
             if 'final_sim_pnl' in st.session_state:
                 st.markdown(f"**최종 통합 평가 손익:** `<span style='color:red;'>{st.session_state.final_sim_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
+            st.markdown("#### 🔍 시뮬레이션 상세 데이터 (Audit Trail)")
+            if 'scen_history' in st.session_state:
+                st.dataframe(pd.DataFrame(st.session_state.scen_history), use_container_width=True, hide_index=True)
 
     elif "2-2" in selected_mode:
-        if st.session_state.rst_step == 0:
+        step = st.session_state[curr_step_key]
+        if step == 0:
             st.info("👈 좌측 대화창에 도달하고자 하는 목표 손실액을 지시해 주십시오.")
-        elif st.session_state.rst_step == 1:
+        elif step == 1:
             st.subheader("◀ 역방향: 위기 좌표 탐색 (Reverse Stress Test)")
             col_r1, col_r2 = st.columns(2)
             radar_ph, contour_ph = col_r1.empty(), col_r2.empty()
@@ -655,11 +656,11 @@ with col_viz:
             K_MESH, S_MESH = np.meshgrid(k_grid, s_grid)
             Z_PNL = np.zeros((10, 10))
             
-            history_data = [] # 이력 데이터 저장용 복구
+            history_data = [] # 20종목 상세 P&L 이력 데이터
             for step in range(steps):
                 ck, cs, cr = k_path[step], s_path[step], r_path[step]
                 
-                # --- [P&L 복구] 각 스텝별 자산 20종의 가격 변화를 계산해서 표에 넣기 ---
+                # 20종목 가격 변화 계산
                 mkt_step = base_mkt_state.copy()
                 mkt_step['KOSPI200_Close'] *= (ck / 100.0)
                 mkt_step['Samsung_Close'] *= (cs / 100.0)
@@ -676,13 +677,9 @@ with col_viz:
                     "삼성전자 잔존가치": f"{cs:.1f}%",
                     "국채금리 충격": f"+{cr:.0f} bp"
                 }
-                for _, r in sim_b_step.iterrows(): 
-                    row_data[f"B_{r['name']}"] = f"{r['pnl']:,.0f}"
-                for _, r in sim_e_step.iterrows(): 
-                    row_data[f"E_{r['name']}"] = f"{r['pnl']:,.0f}"
-                    
+                for _, r in sim_b_step.iterrows(): row_data[f"B_{r['name']}"] = f"{r['pnl']:,.0f}"
+                for _, r in sim_e_step.iterrows(): row_data[f"E_{r['name']}"] = f"{r['pnl']:,.0f}"
                 history_data.append(row_data)
-                # -----------------------------------------------------------
 
                 fig_radar = go.Figure(data=go.Scatterpolar(
                     r=[min(100, max(0, (100-ck)/50*100)), min(100, max(0, (100-cs)/50*100)), min(100, max(0, cr/150*100)), min(100, max(0, (100-ck)/50*100))],
@@ -703,19 +700,18 @@ with col_viz:
             st.session_state.rst_contour = fig_contour
             st.session_state.rst_history = history_data
             st.session_state.rst_final_factors = (k_path[-1], s_path[-1], r_path[-1])
-            st.session_state.rst_step = 2 
+            st.session_state[curr_step_key] = 2 
             st.rerun()
 
-        elif st.session_state.rst_step >= 2:
+        elif step >= 2:
             st.subheader("◀ 역방향: 위기 좌표 탐색 (종료)")
             cr1, cr2 = st.columns(2)
-            # 안전장치 추가
             if 'rst_radar' in st.session_state:
                 cr1.plotly_chart(st.session_state.rst_radar, use_container_width=True, key="radar_final")
             if 'rst_contour' in st.session_state:
                 cr2.plotly_chart(st.session_state.rst_contour, use_container_width=True, key="contour_final")
             
             st.markdown("---")
-            st.markdown("#### 3. 역위기상황 탐색 시계열 상세 데이터 (Audit Trail)")
+            st.markdown("#### 🔍 역위기상황 탐색 시계열 상세 데이터 (Audit Trail)")
             if 'rst_history' in st.session_state:
                 st.dataframe(pd.DataFrame(st.session_state.rst_history), use_container_width=True, hide_index=True)
