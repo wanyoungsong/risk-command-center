@@ -354,9 +354,17 @@ with st.sidebar:
     elif st.session_state.current_mode != selected_mode:
         st.session_state.current_mode = selected_mode
         st.session_state.messages = []
+        
+        # [핵심 에러 해결] 메뉴 이동 시 스텝 무조건 0으로 리셋!
+        st.session_state.scenario_step = 0
+        st.session_state.rst_step = 0
+        
+        # 기억 장치 비우기
         if 'scenario_fig' in st.session_state: del st.session_state['scenario_fig']
         if 'rst_radar' in st.session_state: del st.session_state['rst_radar']
         if 'rst_contour' in st.session_state: del st.session_state['rst_contour']
+        if 'rst_history' in st.session_state: del st.session_state['rst_history']
+        if 'final_sim_pnl' in st.session_state: del st.session_state['final_sim_pnl']
 
     st.markdown("---")
     st.caption(f"System Status: {'Warning' if var_usage_pct > 90 else 'Normal'}")
@@ -590,8 +598,11 @@ with col_viz:
         elif st.session_state.scenario_step >= 3:
             st.markdown("---")
             st.subheader("📈 시계열 파급 분석 (종료)")
-            st.plotly_chart(st.session_state.scenario_fig, use_container_width=True, key="sim_final")
-            st.markdown(f"**최종 통합 평가 손익:** `<span style='color:red;'>{st.session_state.final_sim_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
+            # 안전장치 추가
+            if 'scenario_fig' in st.session_state:
+                st.plotly_chart(st.session_state.scenario_fig, use_container_width=True, key="sim_final")
+            if 'final_sim_pnl' in st.session_state:
+                st.markdown(f"**최종 통합 평가 손익:** `<span style='color:red;'>{st.session_state.final_sim_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
 
     elif "2-2" in selected_mode:
         if st.session_state.rst_step == 0:
@@ -648,13 +659,30 @@ with col_viz:
             for step in range(steps):
                 ck, cs, cr = k_path[step], s_path[step], r_path[step]
                 
-                # 표 데이터 기록
-                history_data.append({
+                # --- [P&L 복구] 각 스텝별 자산 20종의 가격 변화를 계산해서 표에 넣기 ---
+                mkt_step = base_mkt_state.copy()
+                mkt_step['KOSPI200_Close'] *= (ck / 100.0)
+                mkt_step['Samsung_Close'] *= (cs / 100.0)
+                for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']: mkt_step[tenor] += (cr / 100.0)
+                for key in mkt_step.keys():
+                    if key.startswith('Vol_'): mkt_step[key] += (100 - min(ck,cs)) * 0.005
+                
+                sim_b_step = revalue_bonds_multi(df_bonds_scaled, mkt_step, base_mkt_state)
+                sim_e_step = revalue_els_multi(df_els, mkt_step, base_mkt_state)
+
+                row_data = {
                     "탐색 단계": f"Step {step+1}",
                     "KOSPI 잔존가치": f"{ck:.1f}%",
                     "삼성전자 잔존가치": f"{cs:.1f}%",
                     "국채금리 충격": f"+{cr:.0f} bp"
-                })
+                }
+                for _, r in sim_b_step.iterrows(): 
+                    row_data[f"B_{r['name']}"] = f"{r['pnl']:,.0f}"
+                for _, r in sim_e_step.iterrows(): 
+                    row_data[f"E_{r['name']}"] = f"{r['pnl']:,.0f}"
+                    
+                history_data.append(row_data)
+                # -----------------------------------------------------------
 
                 fig_radar = go.Figure(data=go.Scatterpolar(
                     r=[min(100, max(0, (100-ck)/50*100)), min(100, max(0, (100-cs)/50*100)), min(100, max(0, cr/150*100)), min(100, max(0, (100-ck)/50*100))],
@@ -681,9 +709,13 @@ with col_viz:
         elif st.session_state.rst_step >= 2:
             st.subheader("◀ 역방향: 위기 좌표 탐색 (종료)")
             cr1, cr2 = st.columns(2)
-            cr1.plotly_chart(st.session_state.rst_radar, use_container_width=True, key="radar_final")
-            cr2.plotly_chart(st.session_state.rst_contour, use_container_width=True, key="contour_final")
+            # 안전장치 추가
+            if 'rst_radar' in st.session_state:
+                cr1.plotly_chart(st.session_state.rst_radar, use_container_width=True, key="radar_final")
+            if 'rst_contour' in st.session_state:
+                cr2.plotly_chart(st.session_state.rst_contour, use_container_width=True, key="contour_final")
             
             st.markdown("---")
             st.markdown("#### 3. 역위기상황 탐색 시계열 상세 데이터 (Audit Trail)")
-            st.dataframe(pd.DataFrame(st.session_state.rst_history), use_container_width=True, hide_index=True)
+            if 'rst_history' in st.session_state:
+                st.dataframe(pd.DataFrame(st.session_state.rst_history), use_container_width=True, hide_index=True)
