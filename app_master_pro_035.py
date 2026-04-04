@@ -548,4 +548,3 @@ with viz_container:
             cr2.plotly_chart(st.session_state.rst_contour, use_container_width=True)
         else:
             st.info("👈 좌측 대화창에 도달하고자 하는 목표 손실액을 지시해 주십시오.")
-```
