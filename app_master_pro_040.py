@@ -276,24 +276,27 @@ def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limi
 
 def generate_dynamic_scenario(user_input, current_params=None):
     model = genai.GenerativeModel('gemini-2.5-flash')
-    
-    # 이전 파라미터가 있으면 프롬프트에 주입하여 '수정(Tuning)' 문맥을 제공
     context_str = f"\n[현재 적용된 파라미터]\n{current_params}" if current_params else ""
     
     prompt = f"""너는 금융기관 수석 리스크 AI 참모야. 다음 [사용자 입력]을 분석해 JSON으로 응답해.
     입력: {user_input} {context_str}
     
     [필수 지시사항]
-    1. 사용자의 입력이 거시경제, 금융시장 리스크, 시나리오 분석과 전혀 관련이 없다면 (예: 일상 대화, 날씨, 농담 등), 반드시 "is_relevant": false 로 설정하고 "rag_summary"에 "해당 내용은 사내 리스크 지식 그래프 및 제 분석 도메인과 관련이 없습니다. 그런 건 몰라요 😅"라고 단호하게 작성해.
-    2. 관련이 있다면 "is_relevant": true 로 설정해.
-    3. 만약 [현재 적용된 파라미터]가 존재하고, 사용자가 이를 '수정/완화/강화'하려는 의도라면, 기존 파라미터를 바탕으로 사용자가 지시한 숫자만 변경해서 새로운 파라미터 목록을 작성해.
-    4. 파라미터는 무조건 'KOSPI 200 지수', '삼성전자 주가', '국채/회사채 금리' 3가지를 모두 포함해야 해.
+    1. 사용자 입력의 의도(intent)를 다음 4가지 중 하나로 엄격하게 분류해:
+       - "irrelevant": 리스크, 금융, 시나리오와 전혀 무관한 일상 대화.
+       - "explain": 현재 시나리오를 추천한 근거, 이유, 지식그래프 논리 등을 묻는 단순 '질문'. (파라미터 변경 안 함)
+       - "tuning": [현재 적용된 파라미터]의 수치를 변경, 완화, 강화하라는 명시적인 '수정 지시'.
+       - "new": 완전히 새로운 위기 상황(예: "유가가 오르네")을 가정하여 새로운 파라미터를 도출해야 하는 상황.
+       
+    2. intent가 "irrelevant"이면 rag_summary에 "해당 내용은 제 분석 도메인과 관련이 없습니다. 😅"라고 작성.
+    3. intent가 "explain"이면 rag_summary에 시나리오 추천 근거와 파급 논리(지식그래프 기반)를 친절하게 설명하고, parameters는 빈 배열 [] 반환.
+    4. intent가 "new" 또는 "tuning"이면 인과관계를 rag_summary에 설명하고, 반드시 'KOSPI 200 지수', '삼성전자 주가', '국채/회사채 금리' 3가지 팩터가 모두 포함된 parameters 배열을 생성해.
     
     JSON 구조 예시: 
     {{
-        "is_relevant": true, 
-        "rag_summary": "시나리오 파라미터 튜닝 완료", 
-        "kg_logic": "인과관계", 
+        "intent": "explain",
+        "rag_summary": "답변 텍스트", 
+        "kg_logic": "인과관계 텍스트", 
         "parameters": [
             {{"factor": "KOSPI 200 지수", "current": "100%", "target": "90%", "duration": "14일"}},
             {{"factor": "삼성전자 주가", "current": "100%", "target": "80%", "duration": "14일"}},
@@ -439,39 +442,39 @@ with col_chat:
                 curr_msgs.append({"role": "assistant", "content": res})
 
             elif "2-1" in selected_mode:
-                with st.spinner("시나리오 파라미터 추론 및 튜닝 중..."):
-                    # 현재 단계가 1 이상이면 기존 파라미터를 LLM에 전달하여 튜닝
+                with st.spinner("AI 참모가 의도를 분석하고 답변을 준비 중입니다..."):
                     current_params = None
                     if st.session_state[curr_step_key] >= 1 and 'scenario_data' in st.session_state:
                         current_params = st.session_state.scenario_data.get('parameters')
                         
                     res = generate_dynamic_scenario(prompt, current_params)
                 
-                if res.get("is_relevant"):
+                # LLM이 파악한 의도(intent) 가져오기
+                intent = res.get("intent", "irrelevant")
+                
+                if intent == "irrelevant":
+                    st.write(res.get("rag_summary"))
+                    curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
+                
+                elif intent == "explain":
+                    # [핵심] 사용자가 이유를 물어본 경우: 파라미터나 단계를 변경하지 않고 답변만 출력!
+                    st.write(res.get("rag_summary"))
+                    curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
+                    
+                elif intent in ["new", "tuning"]:
+                    # 신규 시나리오 생성 또는 파라미터 튜닝 지시인 경우: 표를 업데이트하고 승인을 대기함
                     st.session_state.scenario_data = res
+                    df_params = pd.DataFrame(res['parameters'])
+                    if len(df_params.columns) == 4:
+                        df_params.columns = ["리스크 팩터", "현재 수준", "최대 충격 (Target)", "충격 도달 기간"]
                     
-                    # [핵심] Claude Artifacts 방식: 튜닝 지시가 들어오면 승인 버튼 생략하고 즉시 재실행
-                    if current_params is not None:
-                        df_params = pd.DataFrame(res['parameters'])
-                        if len(df_params.columns) == 4:
-                            df_params.columns = ["리스크 팩터", "현재 수준", "최대 충격 (Target)", "충격 도달 기간"]
-                        
-                        # 튜닝된 데이터를 강제로 세팅하고 바로 애니메이션(Step 2)으로 점프!
-                        st.session_state.final_scenario_df = df_params
-                        st.session_state[curr_step_key] = 2  
-                        
-                        msg = f"🔄 지시하신 대로 파라미터를 튜닝하여 우측 캔버스에서 시뮬레이션을 즉시 재실행합니다.\n\n**AI 요약:** {res.get('rag_summary')}"
-                    else:
-                        st.session_state[curr_step_key] = 1
-                        msg = "🔍 [AI 파라미터 추출 완료] 우측 화면에서 파라미터를 검토하고 승인 버튼을 눌러주십시오."
+                    st.session_state.final_scenario_df = df_params
+                    st.session_state[curr_step_key] = 1 # 1단계(승인 대기)로 설정하여 캔버스 표출 유지
                     
+                    msg = f"🔍 {res.get('rag_summary')}\n\n우측 화면에서 파라미터를 검토하시고 승인 버튼을 눌러 시뮬레이션을 실행해 주십시오."
                     st.write(msg)
                     curr_msgs.append({"role": "assistant", "content": msg})
                     st.rerun()
-                else:
-                    # 도메인 밖의 질문일 경우 "몰라요" 방어벽 가동
-                    st.write(res.get("rag_summary"))
-                    curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
 
             elif "2-2" in selected_mode:
                 nums = re.findall(r'-?\d+', prompt)
