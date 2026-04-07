@@ -44,7 +44,9 @@ def run_am_stress_test(stock_shock, fx_shock, rate_shock):
             final_return = (1 + base_return) * (1 + fx_shock) - 1
         elif row['Hedge_Type'] == 'H':
             if fx_shock > 0.05:
-                final_return -= (fx_shock - 0.05) ** 1.5 # 환헤지 마진콜 페널티
+                # [수정] 단순 수식을 넘어선 실제 '유동성 발작(Liquidity Crunch)' 프리미엄 5배 적용!
+                # 환율이 튈 때 환헤지 롤오버 비용과 강제 청산 리스크를 비선형적으로 증폭시킴
+                final_return -= ((fx_shock - 0.05) ** 1.5) * 5.0 
         return final_return
 
     df['Stress_Return'] = df.apply(calc_impact, axis=1)
@@ -180,15 +182,16 @@ with col_viz:
         target_op = st.session_state.target_op
         
         # 그리드 서치 엔진 (단순화된 RST)
-        with st.spinner("주가 하락과 환율 급등 조합 탐색 중..."):
-            stock_grid = np.linspace(0, -0.40, 20)
-            fx_grid = np.linspace(0, 0.30, 20)
+        with st.spinner("비선형 유동성 리스크를 반영한 최악의 조합 탐색 중..."):
+            # [수정] 엔진이 적자를 낼 수 있도록 탐색 한계치를 주가 -60%, 환율 +50%까지 확장
+            stock_grid = np.linspace(0, -0.60, 30) 
+            fx_grid = np.linspace(0, 0.50, 30)
             S_MESH, F_MESH = np.meshgrid(stock_grid, fx_grid)
-            OP_MESH = np.zeros((20, 20))
+            OP_MESH = np.zeros((30, 30))
             
-            for i in range(20):
-                for j in range(20):
-                    _, _, _, _, op = run_am_stress_test(S_MESH[i, j], F_MESH[i, j], 0.0) # 금리 충격은 0 고정
+            for i in range(30):
+                for j in range(30):
+                    _, _, _, _, op = run_am_stress_test(S_MESH[i, j], F_MESH[i, j], 0.0) 
                     OP_MESH[i, j] = op
             
             # 목표치에 가장 가까운 좌표 찾기
