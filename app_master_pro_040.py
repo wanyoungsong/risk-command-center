@@ -439,16 +439,37 @@ with col_chat:
                 curr_msgs.append({"role": "assistant", "content": res})
 
             elif "2-1" in selected_mode:
-                with st.spinner("시나리오 파라미터 추론 중..."):
-                    res = generate_dynamic_scenario(prompt)
+                with st.spinner("시나리오 파라미터 추론 및 튜닝 중..."):
+                    # 현재 단계가 1 이상이면 기존 파라미터를 LLM에 전달하여 튜닝
+                    current_params = None
+                    if st.session_state[curr_step_key] >= 1 and 'scenario_data' in st.session_state:
+                        current_params = st.session_state.scenario_data.get('parameters')
+                        
+                    res = generate_dynamic_scenario(prompt, current_params)
+                
                 if res.get("is_relevant"):
                     st.session_state.scenario_data = res
-                    st.session_state[curr_step_key] = 1
-                    msg = "🔍 [AI 파라미터 추출 완료] 우측 화면에서 파라미터를 검토하고 승인 버튼을 눌러주십시오."
+                    
+                    # [핵심] Claude Artifacts 방식: 튜닝 지시가 들어오면 승인 버튼 생략하고 즉시 재실행
+                    if current_params is not None:
+                        df_params = pd.DataFrame(res['parameters'])
+                        if len(df_params.columns) == 4:
+                            df_params.columns = ["리스크 팩터", "현재 수준", "최대 충격 (Target)", "충격 도달 기간"]
+                        
+                        # 튜닝된 데이터를 강제로 세팅하고 바로 애니메이션(Step 2)으로 점프!
+                        st.session_state.final_scenario_df = df_params
+                        st.session_state[curr_step_key] = 2  
+                        
+                        msg = f"🔄 지시하신 대로 파라미터를 튜닝하여 우측 캔버스에서 시뮬레이션을 즉시 재실행합니다.\n\n**AI 요약:** {res.get('rag_summary')}"
+                    else:
+                        st.session_state[curr_step_key] = 1
+                        msg = "🔍 [AI 파라미터 추출 완료] 우측 화면에서 파라미터를 검토하고 승인 버튼을 눌러주십시오."
+                    
                     st.write(msg)
                     curr_msgs.append({"role": "assistant", "content": msg})
                     st.rerun()
                 else:
+                    # 도메인 밖의 질문일 경우 "몰라요" 방어벽 가동
                     st.write(res.get("rag_summary"))
                     curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
 
