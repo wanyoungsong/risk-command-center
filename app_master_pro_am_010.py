@@ -92,7 +92,7 @@ def run_am_stress_test(stock_shock, fx_shock, rate_shock):
 # 2. AI 프롬프트 에이전트
 # ==========================================
 def extract_am_scenario(prompt_text):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""자산운용사 리스크 AI 참모로서, [입력]을 분석해 JSON 파라미터를 추출해.
     입력: {prompt_text}
     조건: 주가(stock), 환율(fx), 금리(rate) 충격량을 소수로 변환해(예: -25% 하락 -> -0.25, 15% 상승 -> 0.15, 2%p 상승 -> 0.02). 언급이 없으면 0.0으로 둬.
@@ -108,7 +108,7 @@ def extract_am_scenario(prompt_text):
 # ==========================================
 def extract_am_scenario(prompt_text):
     # (기존 extract_am_scenario 함수와 동일하게 유지)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     prompt = f"""자산운용사 리스크 AI 참모로서, [입력]을 분석해 JSON 파라미터를 추출해.
     입력: {prompt_text}
     조건: 주가(stock), 환율(fx), 금리(rate) 충격량을 소수로 변환해(예: -25% 하락 -> -0.25, 15% 상승 -> 0.15). 언급이 없으면 0.0으로 둬.
@@ -153,7 +153,7 @@ def get_am_kg_context(stock_shock, fx_shock):
 
 def stream_am_briefing(tot_drop, curr_op, new_op, df, kg_context):
     """지식 그래프(kg_context)를 프롬프트에 심어서 브리핑 생성"""
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     outflow_tot = df['Outflow'].sum()
     prompt = f"""너는 최고투자책임자(CIO)를 보좌하는 운용사 전용 수석 리스크 AI 참모야.
     
