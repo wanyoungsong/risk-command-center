@@ -6,16 +6,38 @@ import google.generativeai as genai
 import json
 import re
 import time
+from neo4j import GraphDatabase
 
 # ==========================================
-# 0. API 세팅
+# 0. API 및 DB 접속 설정
 # ==========================================
+GOOGLE_API_KEY = None
+NEO4J_URI = None
+NEO4J_USER = None
+NEO4J_PASSWORD = None
+
 try:
-    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", None)
-    if GOOGLE_API_KEY:
-        genai.configure(api_key=GOOGLE_API_KEY)
-except Exception:
+    from google.colab import userdata
+    GOOGLE_API_KEY = userdata.get("GOOGLE_API_KEY")
+    NEO4J_URI = userdata.get("NEO4J_URI")
+    NEO4J_USER = userdata.get("NEO4J_USER")
+    NEO4J_PASSWORD = userdata.get("NEO4J_PASSWORD")
+except (ImportError, Exception):
     pass
+
+if not GOOGLE_API_KEY:
+    try:
+        GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+        NEO4J_URI = st.secrets["NEO4J_URI"]
+        NEO4J_USER = st.secrets["NEO4J_USER"]
+        NEO4J_PASSWORD = st.secrets["NEO4J_PASSWORD"]
+    except (KeyError, FileNotFoundError, Exception):
+        pass
+
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+else:
+    st.error("⚠️ GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 # ==========================================
 # 1. 자산운용사 포트폴리오 & 엔진 (유저 로직 적용)
@@ -81,12 +103,71 @@ def extract_am_scenario(prompt_text):
     except:
         return {"is_relevant": True, "stock": -0.25, "fx": 0.15, "rate": 0.02, "summary": "API 오류: 퍼펙트 스톰(주가 -25%, 환율 +15%, 금리 +2%p) 적용"}
 
-def stream_am_briefing(tot_drop, curr_op, new_op, df):
+# ==========================================
+# 2. AI 프롬프트 에이전트 (GraphRAG 탑재)
+# ==========================================
+def extract_am_scenario(prompt_text):
+    # (기존 extract_am_scenario 함수와 동일하게 유지)
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    prompt = f"""자산운용사 리스크 AI 참모로서, [입력]을 분석해 JSON 파라미터를 추출해.
+    입력: {prompt_text}
+    조건: 주가(stock), 환율(fx), 금리(rate) 충격량을 소수로 변환해(예: -25% 하락 -> -0.25, 15% 상승 -> 0.15). 언급이 없으면 0.0으로 둬.
+    JSON 형식: {{"is_relevant": true, "summary": "...", "stock": -0.25, "fx": 0.15, "rate": 0.02}}"""
+    try:
+        res = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
+        return json.loads(res.text)
+    except:
+        return {"is_relevant": True, "stock": -0.25, "fx": 0.15, "rate": 0.02, "summary": "API 오류: 퍼펙트 스톰 기본 적용"}
+
+def get_am_kg_context(stock_shock, fx_shock):
+    """Neo4j에서 충격 조건에 맞는 사내 규정(GraphRAG)을 동적으로 추출"""
+    kg_context = ""
+    # 접속 정보가 없으면 Fallback 텍스트 리턴
+    if not globals().get('NEO4J_URI') or not globals().get('NEO4J_PASSWORD'):
+        return "- [DB 연결 없음] 자산운용사 내부 규정상 환율 5% 초과 급등 시 마진콜 대비 달러 유동성 확보 요망."
+
+    try:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
+            with driver.session() as session:
+                # 조건에 따라 검색 키워드 동적 결정
+                keywords = []
+                if stock_shock <= -0.10: keywords.append("Stock_Crash")
+                if fx_shock >= 0.05: keywords.append("FX_Spike")
+                
+                if not keywords: return "✅ 현재 충격 수준은 사내 비상 규정 트리거(Trigger) 기준치 미달입니다."
+
+                query = """
+                MATCH (rf:RiskFactor)-[:TRIGGERS_POLICY]->(rule:ComplianceRule)
+                MATCH (fund:Fund)-[exp:EXPOSED_TO]->(rf)
+                WHERE rf.name IN $keywords
+                RETURN fund.name AS fund_name, exp.greek AS greek, exp.logic AS logic,
+                       rule.name AS rule_name, rule.code AS rule_code, rule.action_plan AS action_plan
+                """
+                result = session.run(query, keywords=keywords)
+                for record in result:
+                    kg_context += f"##### 🕸️ 데이터 리니지 (영향도)\n- **대상**: {record['fund_name']}\n- **손실 논리({record['greek']})**: {record['logic']}\n"
+                    kg_context += f"##### 🚨 적용 사내 규정\n- **규정**: {record['rule_name']} ({record['rule_code']})\n- **AI 처방**: {record['action_plan']}\n\n"
+    except Exception as e:
+        pass
+    return kg_context
+
+def stream_am_briefing(tot_drop, curr_op, new_op, df, kg_context):
+    """지식 그래프(kg_context)를 프롬프트에 심어서 브리핑 생성"""
     model = genai.GenerativeModel('gemini-2.5-flash')
     outflow_tot = df['Outflow'].sum()
-    prompt = f"""운용사 경영진 대상 AI 브리핑. AUM 손실액: {tot_drop:,.0f}억, 펀드런(유출): {outflow_tot:,.0f}억. 
-    영업이익 변화: {curr_op:,.0f}억 -> {new_op:,.0f}억.
-    환헤지 마진콜, 커버드콜 비선형 손실, 유동성(Fund Run) 리스크를 강조하며 3문단 이내로 권고안을 작성해."""
+    prompt = f"""너는 최고투자책임자(CIO)를 보좌하는 운용사 전용 수석 리스크 AI 참모야.
+    
+    [시뮬레이션 팩트] 
+    - 자산가치 및 펀드런 손실액: {tot_drop:,.0f}억
+    - 뱅크런(Fund Run) 유출액: {outflow_tot:,.0f}억
+    - 영업이익 변화: {curr_op:,.0f}억 -> {new_op:,.0f}억 (적자 전환 여부 강조)
+    
+    [사내 규정 온톨로지 (GraphRAG)]
+    {kg_context}
+
+    [지시사항]
+    위 숫자를 바탕으로 충격의 심각성을 경고하고, 반드시 [사내 규정 온톨로지]에 명시된 'Rule Name'과 'AI 처방(Action Plan)'을 명시하여 각 펀드 데스크가 당장 취해야 할 행동을 마크다운으로 프로페셔널하게 지시해."""
+    
     for chunk in model.generate_content(prompt, stream=True):
         if chunk.text: yield chunk.text
 
@@ -136,10 +217,15 @@ with col_chat:
                 st.session_state.am_results = (df_res, t_curr, t_final, c_op, n_op)
                 
                 st.markdown("🚨 **AI 경영진 브리핑**")
-                res = st.write_stream(stream_am_briefing(t_curr - t_final, c_op, n_op, df_res))
+                # [추가됨] 1. Neo4j 지식 그래프에서 파라미터 충격량에 맞는 규정 뽑아오기
+                kg_context = get_am_kg_context(params['stock'], params['fx'])
+                
+                # [추가됨] 2. 뽑아온 규정(kg_context)을 스트리밍 함수에 파라미터로 넘겨주기
+                res = st.write_stream(stream_am_briefing(t_curr - t_final, c_op, n_op, df_res, kg_context))
+                
                 curr_msgs.append({"role": "assistant", "content": f"🚨 [AI 브리핑]\n\n{res}"})
                 st.rerun()
-
+                
             elif "2" in selected_mode:
                 nums = re.findall(r'-?\d+', prompt)
                 target_op = float(nums[0]) if nums else -100.0
