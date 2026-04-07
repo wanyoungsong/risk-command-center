@@ -183,7 +183,7 @@ for m in modes:
 
 with st.sidebar:
     st.title("🏦 Asset Mgmt Agent")
-    st.caption("수백조 규모 자산운용사 맞춤형 AI 리스크")
+    st.caption("자산운용사 포트폴리오 AI 리스크")
     selected_mode = st.radio("메뉴 선택", modes)
 
 col_chat, col_viz = st.columns([1.3, 1.7], gap="large")
