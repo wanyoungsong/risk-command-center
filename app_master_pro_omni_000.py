@@ -76,7 +76,7 @@ def generate_omni_response(prompt_text, view_state):
     """
     
     model = genai.GenerativeModel(
-        model_name='gemini-2.5-flash',
+        model_name='gemini-3.1-flash-lite-preview',
         system_instruction=system_instruction
     )
     return model.generate_content(prompt_text).text
@@ -116,7 +116,7 @@ with col_chat:
         with st.chat_message("assistant"):
             with st.spinner("의도 파악 및 도구 선택 중..."):
                 # [Function Calling 핵심] AI에게 사용자의 말을 던지고 도구를 고르게 함
-                model = genai.GenerativeModel(model_name='gemini-2.5-flash', tools=omni_tools)
+                model = genai.GenerativeModel(model_name='gemini-3.1-flash-lite-preview', tools=omni_tools)
                 response = model.generate_content(prompt)
                 
                 # AI가 함수 호출(Function Call)을 결정했는지 확인
