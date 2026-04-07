@@ -274,23 +274,30 @@ def stream_ai_prescription(dept_name, usage_pct, metric_name, exposure_amt, limi
     for chunk in model.generate_content(prompt, stream=True):
         if chunk.text: yield chunk.text
 
-def generate_dynamic_scenario(user_input):
-    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+def generate_dynamic_scenario(user_input, current_params=None):
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    # 이전 파라미터가 있으면 프롬프트에 주입하여 '수정(Tuning)' 문맥을 제공
+    context_str = f"\n[현재 적용된 파라미터]\n{current_params}" if current_params else ""
+    
     prompt = f"""너는 금융기관 수석 리스크 AI 참모야. 다음 [사용자 입력]을 분석해 JSON으로 응답해.
-    입력: {user_input}
+    입력: {user_input} {context_str}
     
     [필수 지시사항]
-    사용자가 '유가 급등' 등 특정 이슈만 언급하더라도, 반드시 그 파급 효과를 추론하여 우리 엔진의 3대 핵심 팩터인 'KOSPI 200 지수', '삼성전자 주가', '국채/회사채 금리'에 대한 파라미터를 모두 생성해.
+    1. 사용자의 입력이 거시경제, 금융시장 리스크, 시나리오 분석과 전혀 관련이 없다면 (예: 일상 대화, 날씨, 농담 등), 반드시 "is_relevant": false 로 설정하고 "rag_summary"에 "해당 내용은 사내 리스크 지식 그래프 및 제 분석 도메인과 관련이 없습니다. 그런 건 몰라요 😅"라고 단호하게 작성해.
+    2. 관련이 있다면 "is_relevant": true 로 설정해.
+    3. 만약 [현재 적용된 파라미터]가 존재하고, 사용자가 이를 '수정/완화/강화'하려는 의도라면, 기존 파라미터를 바탕으로 사용자가 지시한 숫자만 변경해서 새로운 파라미터 목록을 작성해.
+    4. 파라미터는 무조건 'KOSPI 200 지수', '삼성전자 주가', '국채/회사채 금리' 3가지를 모두 포함해야 해.
     
     JSON 구조 예시: 
     {{
         "is_relevant": true, 
-        "rag_summary": "시황요약", 
+        "rag_summary": "시나리오 파라미터 튜닝 완료", 
         "kg_logic": "인과관계", 
         "parameters": [
-            {{"factor": "KOSPI 200 지수", "current": "100%", "target": "75%", "duration": "14일"}},
-            {{"factor": "삼성전자 주가", "current": "100%", "target": "70%", "duration": "14일"}},
-            {{"factor": "국채/회사채 금리", "current": "Base Rate", "target": "+100 bp", "duration": "14일"}}
+            {{"factor": "KOSPI 200 지수", "current": "100%", "target": "90%", "duration": "14일"}},
+            {{"factor": "삼성전자 주가", "current": "100%", "target": "80%", "duration": "14일"}},
+            {{"factor": "국채/회사채 금리", "current": "Base Rate", "target": "+50 bp", "duration": "14일"}}
         ]
     }}"""
     response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
