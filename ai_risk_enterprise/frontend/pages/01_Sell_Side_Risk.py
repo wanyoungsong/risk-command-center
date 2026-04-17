@@ -1,3 +1,8 @@
+import sys
+import os
+# 현재 파일의 상위 상위 폴더(ai_risk_enterprise)를 파이썬이 인식하도록 강제 추가
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
