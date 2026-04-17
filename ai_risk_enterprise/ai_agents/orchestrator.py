@@ -5,9 +5,64 @@ import time
 class AIOrchestrator:
     def __init__(self):
         # API 키는 이미 config/settings.py에서 genai.configure()로 세팅되었으므로 바로 모델 호출 가능
-        # 시연 속도와 퀄리티를 위해 가장 최적화된 모델 지정
+        # 최적화된 모델 지정 (시연용으로는 속도가 빠른 flash 모델 권장)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.stream_model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     
+    # ==========================================
+    # [증권사 Sell-Side] AI 참모 프롬프트
+    # ==========================================
+    def stream_sell_side_briefing(self, total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
+        prompt = f"""너는 최고리스크책임자(CRO)를 보좌하는 수석 리스크 AI 참모야. 아래 팩트를 바탕으로 브리핑을 작성해.
+        [데이터] 일간 P&L: {total_pnl/100000000:,.1f}억, ELS P&L: {els_pnl/100000000:,.1f}억, 채권 P&L: {bond_pnl/100000000:,.1f}억, 핵심동인: {top_driver}, VaR소진율: {var_pct:.1f}%
+        [온톨로지 규정] {kg_context}
+        인사말 없이 시작하고, 숫자를 명시하며 마크다운 불릿으로 3문단 이내로 작성해."""
+        
+        for chunk in self.stream_model.generate_content(prompt, stream=True):
+            if chunk.text:
+                yield chunk.text
+                time.sleep(0.01)
+
+    def stream_compliance_prescription(self, dept_name, usage_pct, metric_name, exposure_amt, limit_amt, kg_context):
+        prompt = f"""너는 수석 리스크 AI 참모야. 아래 부서별 한도 초과 상황에 대한 처방을 내려.
+        [현황] 부서: {dept_name}, 지표: {metric_name}, 노출도: {exposure_amt:,.1f}억, 한도: {limit_amt:,.1f}억 (소진율 {usage_pct:.1f}%)
+        [지침] {kg_context}
+        인사말 없이, 규정을 근거로 액션 플랜을 3문단 이내로 강하게 권고해."""
+        
+        for chunk in self.stream_model.generate_content(prompt, stream=True):
+            if chunk.text: 
+                yield chunk.text
+                time.sleep(0.01)
+
+    def generate_dynamic_scenario(self, user_input, current_params=None):
+        context_str = f"\n[현재 적용된 파라미터]\n{current_params}" if current_params else ""
+        
+        prompt = f"""너는 금융기관 수석 리스크 AI 참모야. 다음 [사용자 입력]을 분석해 JSON으로 응답해.
+        입력: {user_input} {context_str}
+        
+        [필수 지시사항]
+        1. 사용자 입력의 의도(intent)를 "irrelevant", "explain", "tuning", "new" 중 하나로 엄격하게 분류해.
+        2. intent가 "explain"이면 시나리오 추천 근거를 설명하고, parameters는 빈 배열 [] 반환.
+        3. intent가 "new" 또는 "tuning"이면 인과관계를 설명하고, 'KOSPI 200 지수', '삼성전자 주가', '국채/회사채 금리' 팩터가 포함된 parameters 배열을 생성해.
+        
+        JSON 구조 예시: 
+        {{
+            "intent": "explain",
+            "rag_summary": "답변 텍스트", 
+            "parameters": [
+                {{"factor": "KOSPI 200 지수", "current": "100%", "target": "90%", "duration": "14일"}}
+            ]
+        }}"""
+        
+        response = self.model.generate_content(
+            prompt, 
+            generation_config=genai.GenerationConfig(response_mime_type="application/json")
+        )
+        return json.loads(response.text)
+
+    # ==========================================
+    # [자산운용사 Buy-Side] AI 참모 프롬프트
+    # ==========================================
     def extract_am_scenario(self, prompt_text):
         """사용자 자연어에서 시나리오 충격 파라미터를 JSON으로 추출"""
         prompt = f"""자산운용사 리스크 AI 참모로서, [입력]을 분석해 JSON 파라미터를 추출해.

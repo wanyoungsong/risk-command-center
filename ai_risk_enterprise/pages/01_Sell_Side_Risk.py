@@ -54,8 +54,8 @@ with col_chat:
 
             # 🕸️ 2단계: 지식 그래프 조회 (Knowledge Graph)
             # (참고: knowledge_graph.py에 증권사용 메서드를 추가했다고 가정)
-            # kg_context = kg_client.get_sell_side_kg_context(top_driver) 
-            kg_context = f"- **적용 규정**: 리스크 관리 규정 제75조\n- **AI 처방**: {top_driver} 변동성 확대에 따른 즉각적인 헤지 포지션(장내파생) 진입 요망."
+            kg_context = kg_client.get_sell_side_kg_context(top_driver) 
+            # kg_context = f"- **적용 규정**: 리스크 관리 규정 제75조\n- **AI 처방**: {top_driver} 변동성 확대에 따른 즉각적인 헤지 포지션(장내파생) 진입 요망."
 
             # 🧠 3단계: AI 브리핑 스트리밍 (Orchestrator)
             with st.chat_message("assistant"):
