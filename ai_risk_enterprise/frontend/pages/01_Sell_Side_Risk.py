@@ -96,8 +96,12 @@ with col_chat:
                 els_pnl = els_res['pnl'].sum()
                 total_pnl = bond_pnl + els_pnl
 
+                # res = st.write_stream(ai_client.stream_sell_side_briefing(
+                #     total_pnl, els_pnl, bond_pnl, top_driver, 85.0, kg_context
+                # ))
+                # [수정 후] 맨 앞에 prompt 변수를 던져줍니다.
                 res = st.write_stream(ai_client.stream_sell_side_briefing(
-                    total_pnl, els_pnl, bond_pnl, top_driver, 85.0, kg_context
+                    prompt, total_pnl, els_pnl, bond_pnl, top_driver, 85.0, kg_context
                 ))
                 curr_msgs.append({"role": "assistant", "content": res})
 
