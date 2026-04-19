@@ -6,7 +6,7 @@ class AIOrchestrator:
     def __init__(self):
         # API 키는 이미 config/settings.py에서 genai.configure()로 세팅되었으므로 바로 모델 호출 가능
         # 최적화된 모델 지정 (시연용으로는 속도가 빠른 flash 모델 권장)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = genai.GenerativeModel('gemini-3.1-flash-lite-preview') # gemini-2.5-flash
         self.stream_model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
     
     # ==========================================
