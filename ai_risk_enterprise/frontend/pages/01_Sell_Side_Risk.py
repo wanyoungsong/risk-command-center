@@ -24,6 +24,11 @@ st.set_page_config(layout="wide")
 def load_data():
     df_m = get_market_data(30)
     df_b, df_e = get_sell_side_portfolio()
+    
+    # [핵심 수정] 시연을 위해 기관급 포트폴리오(수조 원 단위)로 수량(qty) 5만 배 증폭! ?????
+    df_b['qty'] = df_b['qty'] * 50000
+    df_e['qty'] = df_e['qty'] * 50000
+    
     return df_m, df_b, df_e
 
 df_market, df_bonds, df_els = load_data()
