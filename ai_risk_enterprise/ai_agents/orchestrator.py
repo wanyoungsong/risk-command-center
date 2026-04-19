@@ -12,11 +12,17 @@ class AIOrchestrator:
     # ==========================================
     # [증권사 Sell-Side] AI 참모 프롬프트
     # ==========================================
-    def stream_sell_side_briefing(self, total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
-        prompt = f"""너는 최고리스크책임자(CRO)를 보좌하는 수석 리스크 AI 참모야. 아래 팩트를 바탕으로 브리핑을 작성해.
+    # 기존 파라미터 맨 앞에 user_input 추가!
+    def stream_sell_side_briefing(self, user_input, total_pnl, els_pnl, bond_pnl, top_driver, var_pct, kg_context):
+        prompt = f"""너는 최고리스크책임자(CRO)를 보좌하는 수석 리스크 AI 참모야.
+        [사용자 입력] {user_input}
+        
+        [행동 지침]
+        1. [사용자 입력]이 "브리핑 해줘", "오늘 시장 어때?", "손익 얼마야?" 등 리스크 시황을 묻는 질문이라면 아래 [데이터]와 [온톨로지 규정]을 활용해 숫자를 명시하며 3문단 이내로 브리핑해.
+        2. [사용자 입력]이 "넌 누구냐?", "오늘 날씨 어때?" 등 리스크 도메인과 전혀 무관한 질문이라면, 데이터를 무시하고 "저는 전사 마켓 리스크를 감시하는 AI 참모입니다. 해당 내용은 제 분석 도메인이 아닙니다."라고 정중히 선을 긋는 답변만 해.
+
         [데이터] 일간 P&L: {total_pnl/100000000:,.1f}억, ELS P&L: {els_pnl/100000000:,.1f}억, 채권 P&L: {bond_pnl/100000000:,.1f}억, 핵심동인: {top_driver}, VaR소진율: {var_pct:.1f}%
-        [온톨로지 규정] {kg_context}
-        인사말 없이 시작하고, 숫자를 명시하며 마크다운 불릿으로 3문단 이내로 작성해."""
+        [온톨로지 규정] {kg_context}"""
         
         for chunk in self.stream_model.generate_content(prompt, stream=True):
             if chunk.text:
