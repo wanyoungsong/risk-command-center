@@ -1,52 +1,72 @@
+import sys
+import os
 import streamlit as st
-import pandas as pd
 import plotly.graph_objects as go
+import pandas as pd
 import re
-import json
+import time
 
-# 🛠️ 우리가 만든 엔터프라이즈 모듈들 임포트
-from data_access.loaders import get_market_data, get_sell_side_portfolio
-from quant_engines.pricing import calculate_parametric_var, revalue_bonds_multi, revalue_els_multi
-from quant_engines.scenario_engine import ScenarioEngine
-from ai_agents.orchestrator import ai_client
+# [중요] pages 폴더는 루트보다 한 단계 더 깊으므로 두 단계 위(..)를 경로에 추가합니다.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+# 분리된 엔터프라이즈 모듈들 임포트
+from data_access.loaders import generate_daily_risk_factors, get_bond_portfolio, get_els_portfolio
+from quant_engines.pricing import revalue_bonds_multi, revalue_els_multi, calculate_parametric_var
 from ai_agents.knowledge_graph import kg_client
+from ai_agents.orchestrator import ai_client
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="Sell-Side Risk Agent")
 
 # ==========================================
-# 1. 데이터 및 엔진 초기화 (5만배 증폭 삭제, 순정 복구)
+# 1. 데이터 및 실시간 연산 초기화 (원본 로직)
 # ==========================================
 @st.cache_data
-def load_data():
-    df_m = get_market_data(30)
-    df_b, df_e = get_sell_side_portfolio()
-    return df_m, df_b, df_e
+def load_data_and_calc_base():
+    df_market_data = generate_daily_risk_factors(30)
+    df_bonds = get_bond_portfolio()
+    df_els = get_els_portfolio()
+    return df_market_data, df_bonds, df_els
 
-df_market, df_bonds, df_els = load_data()
-base_mkt = df_market.iloc[-2].to_dict()
-curr_mkt = df_market.iloc[-1].to_dict()
+df_market_data, df_bonds, df_els = load_data_and_calc_base()
 
-engine = ScenarioEngine(base_mkt)
+base_mkt_state = df_market_data.iloc[-2].to_dict()
+current_mkt_state = df_market_data.iloc[-1].to_dict()
+bonds_res_today = revalue_bonds_multi(df_bonds, current_mkt_state, base_mkt_state)
+els_res_today = revalue_els_multi(df_els, current_mkt_state, base_mkt_state)
+
+daily_bond_pnl = bonds_res_today['pnl'].sum()
+daily_els_pnl = els_res_today['pnl'].sum()
+daily_total_pnl = daily_bond_pnl + daily_els_pnl
+
+# VaR 및 민감도 계산
+var_amount, var_sens = calculate_parametric_var(df_bonds, df_els, df_market_data, 0.99)
+var_limit = 1500000000
+var_usage_pct = (var_amount / var_limit) * 100
+top_risk_driver = var_sens.abs().idxmax()
+rho_exposure_bn = var_sens.filter(like='KTB').sum() / 100000000
+vega_exposure_bn = var_sens.filter(like='Vol').sum() / 100000000
+dynamic_limits = kg_client.get_dynamic_risk_limits()
 
 # ==========================================
-# 2. 사이드바 및 UI 상태 관리 (Step 복구)
+# 2. 사이드바 및 업무 모드 선택
 # ==========================================
 modes = [
-    "📊 1. 마켓 리스크 브리핑", 
-    "🚨 2. 부서별 한도 관리", 
-    "▶️ 3. 위기 시나리오 분석", 
-    "◀️ 4. 역방향 위기 탐색 (RST)"
+    "📊 1-1. 마켓 리스크 브리핑", 
+    "🚨 1-2. 부서별 한도 관리", 
+    "▶️ 2-1. 위기 시나리오 분석", 
+    "◀️ 2-2. 역방향 위기 탐색"
 ]
 
 with st.sidebar:
-    st.title("📈 Sell-Side 참모")
+    st.title("🤖 Risk Agent")
+    st.caption("Sell-Side 전사 리스크 지휘소")
+    st.markdown("---")
     selected_mode = st.radio("업무 모드 선택", modes)
 
-# 대화와 화면 단계를 분리하여 저장
-if f"msgs_{selected_mode}" not in st.session_state:
-    st.session_state[f"msgs_{selected_mode}"] = []
-if f"step_{selected_mode}" not in st.session_state:
-    st.session_state[f"step_{selected_mode}"] = 0
+# 모드별 세션 상태 초기화
+for m in modes:
+    if f"msgs_{m}" not in st.session_state: st.session_state[f"msgs_{m}"] = []
+    if f"step_{m}" not in st.session_state: st.session_state[f"step_{m}"] = 0
 
 curr_msgs = st.session_state[f"msgs_{selected_mode}"]
 curr_step_key = f"step_{selected_mode}"
@@ -54,175 +74,240 @@ curr_step_key = f"step_{selected_mode}"
 col_chat, col_viz = st.columns([1.3, 1.7], gap="large")
 
 # ==========================================
-# 3. AI 참모 대화창 (Left Column)
+# 3. Center Panel: Chat Logic (AI 참모)
 # ==========================================
 with col_chat:
     st.subheader(f"{selected_mode.split('. ')[1]}")
     
     if not curr_msgs:
         intro = "무엇을 도와드릴까요?"
-        if "1" in selected_mode: intro = "전사 마켓 리스크 브리핑을 준비할까요?"
-        elif "2" in selected_mode: intro = "부서별 한도 모니터링 중입니다. 처방이 필요하시면 지시하세요."
-        elif "3" in selected_mode: intro = "거시 경제 위기 시나리오를 지시해 주십시오."
-        elif "4" in selected_mode: intro = "목표 손실액(예: -400)을 입력하시면 최악의 위기 경로를 역산합니다."
+        if "1-1" in selected_mode: intro = "전사 마켓 리스크 현황이 우측 대시보드에 업데이트되었습니다. 경영진 보고용 시황 브리핑이 필요하시면 지시해 주십시오."
+        elif "1-2" in selected_mode: intro = "부서별 리스크 한도 모니터링 중입니다. 한도 초과에 대한 처방전 기안이 필요하면 지시해 주십시오."
+        elif "2-1" in selected_mode: intro = "거시 경제 위기 시나리오를 지시해 주십시오. (예: '유가가 급등하는 상황 분석해줘')"
+        elif "2-2" in selected_mode: intro = "경영진이 우려하는 목표 손실액을 입력해 주시면 최악의 위기 경로를 역산합니다."
         curr_msgs.append({"role": "assistant", "content": intro})
 
     for msg in curr_msgs:
         st.chat_message(msg["role"]).write(msg["content"])
+
+    # 시뮬레이션 종료 후 자동 브리핑 (Step 3 -> 4)
+    if "2-1" in selected_mode and st.session_state[curr_step_key] == 3:
+        with st.chat_message("assistant"):
+            st.markdown("🚨 **시뮬레이션 분석 결과를 브리핑합니다.**")
+            df_json = st.session_state.final_scenario_df.to_dict(orient="records")
+            response = st.write_stream(ai_client.stream_scenario_response(st.session_state.final_sim_pnl, df_json))
+            curr_msgs.append({"role": "assistant", "content": f"🚨 [시뮬레이션 분석 결과]\n\n{response}"})
+            st.session_state[curr_step_key] = 4
+
+    # RST 종료 후 자동 브리핑 (Step 2 -> 3)
+    if "2-2" in selected_mode and st.session_state[curr_step_key] == 2:
+        with st.chat_message("assistant"):
+            st.markdown("🚨 **역방향 위기 탐색 결과를 브리핑합니다.**")
+            fk, fs, fr = st.session_state.rst_final_factors
+            response = st.write_stream(ai_client.stream_rst_response(st.session_state.target_loss, fk, fs, fr))
+            curr_msgs.append({"role": "assistant", "content": f"🚨 [RST 분석 결과]\n\n{response}"})
+            st.session_state[curr_step_key] = 3
 
     if prompt := st.chat_input("AI 참모에게 지시하세요..."):
         curr_msgs.append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            if "1" in selected_mode:
-                # 1. 마켓 리스크 브리핑
-                var_amt, var_sens = calculate_parametric_var(df_bonds, df_els, df_market, 0.99)
-                top_driver = var_sens.abs().idxmax()
-                kg_context = kg_client.get_sell_side_kg_context(top_driver)
-                
-                bonds_res = revalue_bonds_multi(df_bonds, curr_mkt, base_mkt)
-                els_res = revalue_els_multi(df_els, curr_mkt, base_mkt)
-                bond_pnl = bonds_res['pnl'].sum()
-                els_pnl = els_res['pnl'].sum()
-                total_pnl = bond_pnl + els_pnl
-
-                res = st.write_stream(ai_client.stream_sell_side_briefing(
-                    prompt, total_pnl, els_pnl, bond_pnl, top_driver, 85.0, kg_context
-                ))
+            if "1-1" in selected_mode:
+                kg_context = kg_client.get_knowledge_graph_context(top_risk_driver)
+                res = st.write_stream(ai_client.stream_ai_briefing(daily_total_pnl, daily_els_pnl, daily_bond_pnl, top_risk_driver, var_usage_pct, kg_context))
                 curr_msgs.append({"role": "assistant", "content": res})
 
-                st.session_state.sell_dashboard = (total_pnl, var_amt, top_driver, bond_pnl, els_pnl)
-                st.session_state[curr_step_key] = 1
-                st.rerun()
+            elif "1-2" in selected_mode:
+                dept_code, dept_name, usage, metric, exp, limit = 'ENTERPRISE', '전사 통합 리스크 위원회', var_usage_pct, '전사 VaR', var_amount/100000000, dynamic_limits.get("전사 VaR 한도", 1500)
+                if '채권' in prompt:
+                    dept_code, dept_name, usage, metric, exp, limit = 'BOND_DESK', '채권 운용 데스크', abs(rho_exposure_bn/dynamic_limits.get("금리 민감도(Rho) 한도", 40))*100, 'Rho', rho_exposure_bn, dynamic_limits.get("금리 민감도(Rho) 한도", 40)
+                elif 'ELS' in prompt or 'els' in prompt.lower():
+                    dept_code, dept_name, usage, metric, exp, limit = 'ELS_DESK', 'ELS 운용 데스크', abs(vega_exposure_bn/dynamic_limits.get("변동성 민감도(Vega) 한도", 30))*100, 'Vega', vega_exposure_bn, dynamic_limits.get("변동성 민감도(Vega) 한도", 30)
+                
+                kg_context = kg_client.get_compliance_graph_context(dept_code, usage)
+                res = st.write_stream(ai_client.stream_ai_prescription(dept_name, usage, metric, exp, limit, kg_context))
+                curr_msgs.append({"role": "assistant", "content": res})
 
-            elif "3" in selected_mode:
-                # 3. 시나리오 분석: JSON 파싱 후 승인 대기(Step 1) 상태로 진입
-                res = ai_client.generate_dynamic_scenario(prompt)
-                if res.get("intent") in ["new", "tuning"]:
-                    # JSON 응답에서 파라미터 추출
-                    st.session_state.scenario_params = res.get('parameters', [])
-                    st.session_state[curr_step_key] = 1 # 승인 대기 상태로 변경
-                    
-                    msg = f"🔍 {res.get('rag_summary')}\n\n우측 화면에서 파라미터를 검토하시고 **승인 버튼**을 눌러 시뮬레이션을 실행해 주십시오."
+            elif "2-1" in selected_mode:
+                current_params = st.session_state.scenario_data.get('parameters') if st.session_state[curr_step_key] >= 1 and 'scenario_data' in st.session_state else None
+                res = ai_client.generate_dynamic_scenario(prompt, current_params)
+                intent = res.get("intent", "irrelevant")
+                
+                if intent == "irrelevant" or intent == "explain":
+                    st.write(res.get("rag_summary"))
+                    curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
+                elif intent in ["new", "tuning"]:
+                    st.session_state.scenario_data = res
+                    df_params = pd.DataFrame(res['parameters'])
+                    if len(df_params.columns) == 4: df_params.columns = ["리스크 팩터", "현재 수준", "최대 충격 (Target)", "충격 도달 기간"]
+                    st.session_state.final_scenario_df = df_params
+                    st.session_state[curr_step_key] = 1 
+                    msg = f"🔍 {res.get('rag_summary')}\n\n우측 화면에서 파라미터를 검토하시고 승인 버튼을 눌러 시뮬레이션을 실행해 주십시오."
                     st.write(msg)
                     curr_msgs.append({"role": "assistant", "content": msg})
                     st.rerun()
-                else:
-                    st.write(res.get("rag_summary"))
-                    curr_msgs.append({"role": "assistant", "content": res.get("rag_summary")})
 
-            elif "4" in selected_mode:
-                # 4. 역방향 탐색: 엔진 호출 후 시각화(Step 1) 상태로 진입
+            elif "2-2" in selected_mode:
                 nums = re.findall(r'-?\d+', prompt)
-                target_loss = float(nums[0]) if nums else -400.0
-                st.write(f"🔍 목표 손실 {target_loss}억 원 도달 최단 경로 탐색을 시작합니다.")
-                
-                with st.spinner("RST 엔진 경사하강법 탐색 중..."):
-                    path_result = engine.find_worst_case_path(df_bonds, df_els, target_loss)
-                    st.session_state.rst_path = path_result
-                    st.session_state[curr_step_key] = 1
-                
-                curr_msgs.append({"role": "assistant", "content": "탐색이 완료되었습니다. 우측 캔버스의 경로 데이터를 확인하십시오."})
+                st.session_state.target_loss = float(nums[0]) if nums else -400.0
+                st.session_state[curr_step_key] = 1
+                msg = f"🔍 목표 손실 **{st.session_state.target_loss}억 원** 위기 경로 탐색을 시작합니다. 우측 화면을 확인해 주십시오."
+                st.write(msg)
+                curr_msgs.append({"role": "assistant", "content": msg})
                 st.rerun()
 
 # ==========================================
-# 4. 시각화 캔버스 (Right Column)
+# 4. Right Panel: Visualization (우측 캔버스)
 # ==========================================
 with col_viz:
-    step = st.session_state[curr_step_key]
-    
-    if "1" in selected_mode and step == 1:
-        st.subheader("📊 리스크 통합 대시보드")
-        total_pnl, var_amt, top_driver, bond_pnl, els_pnl = st.session_state.sell_dashboard
+    if "1-1" in selected_mode:
+        st.subheader("📊 전사 마켓 리스크 현황")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("전사 통합 P&L", f"{daily_total_pnl/100000000:,.1f}억")
+        m2.metric("VaR (99%, 1D)", f"{var_amount/100000000:,.1f}억")
+        m3.metric("한도 소진율", f"{var_usage_pct:.1f}%")
+        m4.metric("주요 동인", top_risk_driver)
         
-        m1, m2, m3 = st.columns(3)
-        m1.metric("통합 Net P&L", f"{total_pnl/100000000:,.1f}억")
-        m2.metric("전사 VaR (99%, 1D)", f"{var_amt/100000000:,.1f}억")
-        m3.metric("최대 리스크 동인", top_driver)
-        
-        st.markdown("#### 📁 데스크별 P&L 기여도")
-        df_summary = pd.DataFrame({
-            "포트폴리오 (Desk)": ["채권 운용 (Fixed Income)", "ELS 자체헤지 (Derivatives)"],
-            "일간 손익 (P&L)": [f"{bond_pnl/100000000:,.1f}억", f"{els_pnl/100000000:,.1f}억"],
-            "포지션 비중": ["Long Bias", "Delta Neutral"]
-        })
+        st.markdown("#### 포트폴리오 노출도")
+        df_summary = pd.DataFrame({"포트폴리오": ["채권 (Long)", "ELS (자체헤지)"], "Delta": [f"{rho_exposure_bn:,.1f}억", "0.0억(헤지)"], "Net P&L": [f"{daily_bond_pnl/100000000:,.1f}억", f"{daily_els_pnl/100000000:,.1f}억"]})
         st.dataframe(df_summary, use_container_width=True, hide_index=True)
 
-    # ----------------------------------------------------
-    # 모드 3: 시나리오 분석 (승인 -> 실행 흐름 복구)
-    # ----------------------------------------------------
-    elif "3" in selected_mode:
-        if step == 1:
+    elif "1-2" in selected_mode:
+        st.subheader("🚨 부서별 리스크 한도 모니터링")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("##### 🏢 전사 통합")
+            st.progress(min(var_usage_pct/100, 1.0), text=f"VaR 한도: {var_usage_pct:.1f}%")
+        with c2:
+            st.markdown("##### 📈 채권 데스크")
+            rho_usage = abs(rho_exposure_bn/dynamic_limits.get("금리 민감도(Rho) 한도", 40))*100
+            st.progress(min(rho_usage/100, 1.0), text=f"Rho 한도: {rho_usage:.1f}%")
+        with c3:
+            st.markdown("##### 📉 ELS 데스크")
+            vega_usage = abs(vega_exposure_bn/dynamic_limits.get("변동성 민감도(Vega) 한도", 30))*100
+            st.progress(min(vega_usage/100, 1.0), text=f"Vega 한도: {vega_usage:.1f}%")
+
+    elif "2-1" in selected_mode:
+        step = st.session_state[curr_step_key]
+        if step == 0: st.info("👈 좌측 대화창에 위기 시나리오를 지시해 주십시오.")
+        elif step == 1:
             st.subheader("📝 시나리오 파라미터 검토 및 승인")
-            # AI가 뽑아준 파라미터를 표 형태로 변환하여 편집기 띄우기
-            df_params = pd.DataFrame(st.session_state.scenario_params)
-            edited_df = st.data_editor(df_params, use_container_width=True, hide_index=True)
-            
+            edited_df = st.data_editor(st.session_state.final_scenario_df, use_container_width=True, hide_index=True)
             if st.button("✅ 기안 승인 및 Full Revaluation 실행", type="primary"):
-                with st.spinner("시계열 파급 시뮬레이션 중..."):
-                    # 예시를 위해 데이터프레임의 값들을 하드코딩 수치로 단순 파싱하여 넘김
-                    target_params = {'kospi': 80.0, 'samsung': 75.0, 'rate': 50.0} 
-                    history = engine.generate_simulation_path(df_bonds, df_els, target_params)
-                    st.session_state.scenario_history = history
-                    st.session_state[curr_step_key] = 2 # 결과 보기 단계로 변경
-                    st.rerun()
-                    
+                st.session_state.final_scenario_df = edited_df
+                st.session_state[curr_step_key] = 2
+                st.rerun()
         elif step == 2:
-            st.subheader("📈 시뮬레이션 시계열 파급 결과")
-            history = st.session_state.scenario_history
-            df_hist = pd.DataFrame(history)
+            st.subheader("📈 시계열 파급 분석")
+            chart_placeholder = st.empty()
+            metrics_placeholder = st.empty()
             
-            # 최종 손익 강조
-            final_pnl = df_hist.iloc[-1]['total_pnl']
-            st.markdown(f"**최종 통합 평가 손익:** `<span style='color:red;'>{final_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
-            
-            st.markdown("#### 🔍 시뮬레이션 상세 데이터 (Audit Trail)")
-            # 보기 좋게 포맷팅 (P&L은 억 단위로 변환)
-            df_display = df_hist.copy()
-            df_display['kospi'] = df_display['kospi'].map("{:.1f}%".format)
-            df_display['samsung'] = df_display['samsung'].map("{:.1f}%".format)
-            df_display['rate_shock'] = df_display['rate_shock'].map("+{:.0f}bp".format)
-            df_display['total_pnl'] = (df_display['total_pnl']/100000000).map("{:,.1f}억".format)
-            df_display['bond_pnl'] = (df_display['bond_pnl']/100000000).map("{:,.1f}억".format)
-            df_display['els_pnl'] = (df_display['els_pnl']/100000000).map("{:,.1f}억".format)
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            df = st.session_state.final_scenario_df
+            def get_target_num(text, default=100.0):
+                nums = re.findall(r'[-+]?\d*\.?\d+', str(text))
+                return float(nums[-1]) if nums else default
 
-    # ----------------------------------------------------
-    # 모드 4: 역위기상황 탐색 (RST 경로 렌더링 복구)
-    # ----------------------------------------------------
-    elif "4" in selected_mode:
-        if step == 1 and "rst_path" in st.session_state:
-            st.subheader("◀ 역방향: 위기 좌표 탐색 완료")
-            path = st.session_state.rst_path
+            rate_target, kospi_target, samsung_target, duration_days = 0.0, 100.0, 100.0, 14
+            for _, row in df.iterrows():
+                factor = row.iloc[0]
+                target_val = get_target_num(row.iloc[2])
+                if "금리" in factor: rate_target = target_val
+                elif "KOSPI" in factor: kospi_target = target_val
+                elif "삼성전자" in factor: samsung_target = target_val
             
-            if not path:
-                st.error("경로 탐색에 실패했습니다. 엔진 파라미터를 확인하세요.")
-            else:
-                final_state = path[-1]
-                st.error(f"🚨 타격점 발견: KOSPI {final_state['kospi']:.1f}%, 삼성전자 {final_state['samsung']:.1f}%, 금리 +{final_state['rate']:.0f}bp")
+            steps_count = 7
+            traj_x = np.linspace(100, kospi_target, steps_count).tolist()
+            traj_y = np.linspace(100, samsung_target, steps_count).tolist()
+            rate_shocks = np.linspace(0, rate_target, steps_count).tolist()
+            traj_z = [100 - ((100 - x)*1.5 + (100 - y)*1.5) for x, y in zip(traj_x, traj_y)]
+            
+            x, y = np.linspace(40, 100, 40), np.linspace(40, 100, 40)
+            X, Y = np.meshgrid(x, y)
+            Z = 100 + (X - 100)*0.3 + (Y - 100)*0.3 - np.where(X < 80, (80 - X)*1.5, 0) - np.where(Y < 60, (60 - Y)*2.5, 0) - 35*np.exp(-0.03*((X - 75)**2 + (Y - 55)**2))
+            
+            df_bonds_scaled = df_bonds.copy(); df_bonds_scaled['qty'] *= 100
+            scen_history = []
+
+            for i in range(steps_count):
+                fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='Blues', opacity=0.7)])
+                fig.add_trace(go.Scatter3d(x=traj_x[:i+1], y=traj_y[:i+1], z=traj_z[:i+1], mode='lines', line=dict(color='orange', width=6)))
+                fig.add_trace(go.Scatter3d(x=[traj_x[i]], y=[traj_y[i]], z=[traj_z[i]], mode='markers', marker=dict(size=10, color='red')))
+                fig.update_layout(title=f"⏳ Day {int(i*2)}", scene=dict(xaxis_title='KOSPI 200', yaxis_title='삼성전자', camera=dict(eye=dict(x=-1.5, y=-1.5, z=1.2))), margin=dict(l=0,r=0,b=0,t=30), height=350)
+                chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"sim_anim_{i}")
+
+                curr_mkt = base_mkt_state.copy()
+                curr_mkt['KOSPI200_Close'] *= (traj_x[i]/100.0); curr_mkt['Samsung_Close'] *= (traj_y[i]/100.0)
+                for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']: curr_mkt[tenor] += (rate_shocks[i] / 100.0)
                 
-                col_r1, col_r2 = st.columns(2)
+                sim_bonds = revalue_bonds_multi(df_bonds_scaled, curr_mkt, base_mkt_state)
+                sim_els = revalue_els_multi(df_els, curr_mkt, base_mkt_state)
+                final_total_pnl = sim_bonds['pnl'].sum() + sim_els['pnl'].sum()
+
+                row_data = {"단계": f"Day {i*2}", "KOSPI": f"{traj_x[i]:.1f}%", "삼성": f"{traj_y[i]:.1f}%", "금리": f"+{rate_shocks[i]:.0f}bp"}
+                for _, r in sim_bonds.iterrows(): row_data[f"B_{r['name']}"] = f"{r['pnl']:,.0f}"
+                for _, r in sim_els.iterrows(): row_data[f"E_{r['name']}"] = f"{r['pnl']:,.0f}"
+                scen_history.append(row_data)
+
+                metrics_placeholder.markdown(f"**실시간 통합 평가 손익:** `<span style='color:red;'>{final_total_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
+                time.sleep(0.4)
+
+            st.session_state.scen_history = scen_history; st.session_state.final_sim_pnl = final_total_pnl; st.session_state.scenario_fig = fig
+            st.session_state[curr_step_key] = 3; st.rerun()
+        elif step >= 3:
+            st.plotly_chart(st.session_state.scenario_fig, use_container_width=True)
+            st.markdown(f"**최종 통합 평가 손익:** `<span style='color:red;'>{st.session_state.final_sim_pnl/100000000:,.1f}억 원</span>`", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(st.session_state.scen_history), use_container_width=True, hide_index=True)
+
+    elif "2-2" in selected_mode:
+        step = st.session_state[curr_step_key]
+        if step == 0: st.info("👈 좌측 대화창에 목표 손실액을 지시해 주십시오.")
+        elif step == 1:
+            st.subheader("◀ 역방향: 위기 좌표 탐색 (RST)")
+            col_r1, col_r2 = st.columns(2)
+            radar_ph, contour_ph = col_r1.empty(), col_r2.empty()
+            df_bonds_scaled = df_bonds.copy(); df_bonds_scaled['qty'] *= 100
+            
+            def eval_pnl(k, s, r):
+                mkt = base_mkt_state.copy()
+                mkt['KOSPI200_Close'] *= (k / 100.0); mkt['Samsung_Close'] *= (s / 100.0)
+                for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']: mkt[tenor] += (r / 100.0)
+                tb = revalue_bonds_multi(df_bonds_scaled, mkt, base_mkt_state)
+                te = revalue_els_multi(df_els, mkt, base_mkt_state)
+                return tb['pnl'].sum() + te['pnl'].sum()
+
+            target_pnl_raw = st.session_state.target_loss * 100000000
+            ck, cs, cr = 100.0, 100.0, 0.0
+            pk, ps, pr = [100.0], [100.0], [0.0]
+            
+            with st.spinner("최적화 엔진 역탐색 중..."):
+                for _ in range(40):
+                    curr_pnl = eval_pnl(ck, cs, cr)
+                    if curr_pnl <= target_pnl_raw: break
+                    gk = max(0, curr_pnl - eval_pnl(ck - 1.0, cs, cr)) + 1.0
+                    gs = max(0, curr_pnl - eval_pnl(ck, cs - 1.0, cr)) + 1.5
+                    gr = max(0, curr_pnl - eval_pnl(ck, cs, cr + 1.0)) + 2.0
+                    total_g = gk + gs + gr
+                    ck = max(10.0, ck - (gk/total_g)*2.0); cs = max(10.0, cs - (gs/total_g)*2.0); cr += (gr/total_g)*5.0
+                    pk.append(ck); ps.append(cs); pr.append(cr)
+            
+            idx = np.linspace(0, len(pk)-1, 10).astype(int)
+            k_path, s_path, r_path = [pk[i] for i in idx], [ps[i] for i in idx], [pr[i] for i in idx]
+            
+            for s in range(10):
+                ck, cs, cr = k_path[s], s_path[s], r_path[s]
+                fig_radar = go.Figure(data=go.Scatterpolar(r=[(100-ck)*2, (100-cs)*2, cr/1.5, (100-ck)*2], theta=['KOSPI 하락', '삼성전자 하락', '금리 상승', 'KOSPI 하락'], fill='toself', line=dict(color='red', width=2)))
+                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), showlegend=False, height=350, margin=dict(l=30,r=30,t=30,b=30))
+                radar_ph.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{s}")
                 
-                # 좌측: 최종 도달 레이더 차트
-                fig = go.Figure(data=go.Scatterpolar(
-                    r=[max(0, 100-final_state['kospi']), max(0, 100-final_state['samsung']), max(0, final_state['rate']/1.5), max(0, 100-final_state['kospi'])],
-                    theta=['KOSPI 하락', '삼성전자 하락', '금리 상승', 'KOSPI 하락'],
-                    fill='toself', line=dict(color='red', width=2)
-                ))
-                fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), showlegend=False, height=350, margin=dict(t=30, b=30))
-                col_r1.plotly_chart(fig, use_container_width=True)
+                fig_contour = go.Figure(data=go.Contour(z=[[0,1],[1,2]], x=[ck-10, 100], y=[cs-10, 100], colorscale='RdBu'))
+                fig_contour.add_trace(go.Scatter(x=k_path[:s+1], y=s_path[:s+1], mode='lines+markers', line=dict(color='#00FF00', width=4)))
+                fig_contour.update_layout(height=350, margin=dict(l=30,r=30,t=30,b=30), showlegend=False)
+                contour_ph.plotly_chart(fig_contour, use_container_width=True, key=f"contour_{s}")
+                time.sleep(0.3)
 
-                # 우측: 탐색 궤적 상세 데이터 표
-                with col_r2:
-                    st.markdown("#### 🔍 경사하강법 탐색 궤적")
-                    df_path = pd.DataFrame(path)
-                    df_path['step'] = range(1, len(df_path) + 1)
-                    df_path['kospi'] = df_path['kospi'].map("{:.1f}%".format)
-                    df_path['samsung'] = df_path['samsung'].map("{:.1f}%".format)
-                    df_path['rate'] = df_path['rate'].map("+{:.0f}bp".format)
-                    df_path['pnl'] = (df_path['pnl']/100000000).map("{:,.1f}억".format)
-                    st.dataframe(df_path[['step', 'kospi', 'samsung', 'rate', 'pnl']], use_container_width=True, hide_index=True)
-
-    else:
-        st.info("👈 좌측 대화창에서 AI 참모에게 분석을 지시해 주세요.")
+            st.session_state.rst_final_factors = (ck, cs, cr); st.session_state[curr_step_key] = 2; st.rerun()
+        elif step >= 2:
+            st.subheader("◀ 역방향: 위기 좌표 탐색 (종료)")
+            c1, c2 = st.columns(2)
+            c1.info(f"최종 좌표: KOSPI {st.session_state.rst_final_factors[0]:.1f}%, 삼성 {st.session_state.rst_final_factors[1]:.1f}%, 금리 +{st.session_state.rst_final_factors[2]:.0f}bp")
