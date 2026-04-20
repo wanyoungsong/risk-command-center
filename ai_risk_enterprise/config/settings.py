@@ -1,7 +1,6 @@
-import os
-import google.generativeai as genai
+import streamlit as st
 
-class Settings:
+class Config:
     def __init__(self):
         self.GOOGLE_API_KEY = None
         self.NEO4J_URI = None
@@ -10,26 +9,22 @@ class Settings:
         self._load_config()
 
     def _load_config(self):
-        # 1. 환경 변수 (서버 배포 시 사용)
-        self.GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-        self.NEO4J_URI = os.environ.get("NEO4J_URI")
-        self.NEO4J_USER = os.environ.get("NEO4J_USER")
-        self.NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
+        try:
+            from google.colab import userdata
+            self.GOOGLE_API_KEY = userdata.get("GOOGLE_API_KEY")
+            self.NEO4J_URI = userdata.get("NEO4J_URI")
+            self.NEO4J_USER = userdata.get("NEO4J_USER")
+            self.NEO4J_PASSWORD = userdata.get("NEO4J_PASSWORD")
+        except (ImportError, Exception):
+            pass
 
-        # 2. Streamlit Secrets (로컬/Streamlit Cloud 테스트용)
         if not self.GOOGLE_API_KEY:
             try:
-                import streamlit as st
-                self.GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
-                self.NEO4J_URI = st.secrets.get("NEO4J_URI")
-                self.NEO4J_USER = st.secrets.get("NEO4J_USER")
-                self.NEO4J_PASSWORD = st.secrets.get("NEO4J_PASSWORD")
-            except Exception:
+                self.GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+                self.NEO4J_URI = st.secrets["NEO4J_URI"]
+                self.NEO4J_USER = st.secrets["NEO4J_USER"]
+                self.NEO4J_PASSWORD = st.secrets["NEO4J_PASSWORD"]
+            except (KeyError, FileNotFoundError, Exception):
                 pass
 
-        # Gemini API 자동 초기화
-        if self.GOOGLE_API_KEY:
-            genai.configure(api_key=self.GOOGLE_API_KEY)
-
-# 싱글톤 인스턴스 생성 (다른 파일에서는 config 변수만 임포트해서 사용)
-config = Settings()
+config = Config()
