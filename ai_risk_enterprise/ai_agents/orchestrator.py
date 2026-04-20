@@ -66,4 +66,30 @@ class AIOchestrator:
         for chunk in self.model_lite.generate_content(prompt, stream=True):
             if chunk.text: yield chunk.text
 
+    def extract_am_scenario(self, prompt_text):
+        """자산운용사 자연어 시나리오에서 JSON 파라미터 추출"""
+        prompt = f"""자산운용사 리스크 AI 참모로서, [입력]을 분석해 JSON 파라미터를 추출해.
+        입력: {prompt_text}
+        조건: 주가(stock), 환율(fx), 금리(rate) 충격량을 소수로 변환해. 언급이 없으면 0.0으로 둬. (예: 25% 하락 -> -0.25)
+        JSON 형식: {{"is_relevant": true, "summary": "...", "stock": -0.25, "fx": 0.15, "rate": 0.02}}"""
+        try:
+            res = self.model_flash.generate_content(
+                prompt, 
+                generation_config=genai.GenerationConfig(response_mime_type="application/json")
+            )
+            return json.loads(res.text)
+        except Exception:
+            return {"is_relevant": True, "stock": -0.20, "fx": 0.0, "rate": 0.0, "summary": "파싱 오류: 기본 20% 하락 적용"}
+
+    def stream_am_briefing(self, tot_drop, curr_op, new_op, outflow_tot, kg_context):
+        """자산운용사 경영진 브리핑 스트리밍"""
+        prompt = f"""너는 최고투자책임자(CIO)를 보좌하는 운용사 전용 수석 리스크 AI 참모야.
+        [팩트] 자산가치 손실액: {tot_drop:,.0f}억, 펀드런 유출액: {outflow_tot:,.0f}억, 영업이익 변화: {curr_op:,.0f}억 -> {new_op:,.0f}억
+        [사내 규정] {kg_context}
+        위 숫자를 바탕으로 충격의 심각성을 경고하고, 사내 규정에 명시된 대응 조치를 강하게 권고해. 인사말은 생략해."""
+        for chunk in self.model_lite.generate_content(prompt, stream=True):
+            if chunk.text:
+                yield chunk.text
+                time.sleep(0.01)
+                
 ai_client = AIOchestrator()
