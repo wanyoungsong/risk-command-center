@@ -64,10 +64,15 @@ def get_els_portfolio():
 
 def get_buy_side_funds():
     """자산운용사(Buy-Side) 가상 펀드 포트폴리오 데이터"""
-    data = [
-        {"Fund_ID": "F01", "Name": "K-인덱스 펀드", "Current_AUM": 5000, "Fee_Rate(%)": 0.15, "Delta": 0.95, "Gamma": 0.05, "Rate_Beta": -0.5, "Hedge_Type": "UH"},
-        {"Fund_ID": "F02", "Name": "글로벌 테크 펀드", "Current_AUM": 3000, "Fee_Rate(%)": 0.50, "Delta": 1.20, "Gamma": 0.10, "Rate_Beta": -0.2, "Hedge_Type": "H"},
-        {"Fund_ID": "F03", "Name": "ESG 배당 펀드", "Current_AUM": 2000, "Fee_Rate(%)": 0.30, "Delta": 0.80, "Gamma": 0.02, "Rate_Beta": -0.8, "Hedge_Type": "UH"},
-    ]
-    fixed_costs = 5.0 # 운용사 고정비용 (단위: 억 원)
-    return pd.DataFrame(data), fixed_costs
+    fund_data = {
+        'Fund_Name': ['KOSPI 200 인덱스 펀드', 'TIGER 나스닥100 (UH)', 'TIGER 나스닥100 (H)', 'TIGER 미국테크 커버드콜', '글로벌 상업용 부동산 펀드'],
+        'Current_AUM': [50000, 80000, 60000, 40000, 70000],
+        'Fee_Rate(%)': [0.15, 0.50, 0.50, 0.70, 1.50],
+        'Hedge_Type':  ['None', 'UH', 'H', 'UH', 'H'],
+        'Delta':       [1.0, 1.0, 1.0, 0.6, 0.0],
+        'Gamma':       [0.0, 0.0, 0.0, -1.2, 0.0],
+        'Rate_Beta':   [0.0, 0.0, 0.0, 0.0, -6.0]
+    }
+    df_base = pd.DataFrame(fund_data).set_index('Fund_Name')
+    fixed_costs = 800  # 분기 고정비 (억원)
+    return df_base, fixed_costs
