@@ -61,3 +61,13 @@ def get_els_portfolio():
         {"els_id": "E10", "name": "ELS_KOSPI_NAVER_KI70", "asset1": "KOSPI200_Close", "asset2": "Naver_Close", "ki_barrier": 70, "qty": 2500},
     ]
     return pd.DataFrame(els_portfolio)
+
+def get_buy_side_funds():
+    """자산운용사(Buy-Side) 가상 펀드 포트폴리오 데이터"""
+    data = [
+        {"Fund_ID": "F01", "Name": "K-인덱스 펀드", "Current_AUM": 5000, "Fee_Rate(%)": 0.15, "Delta": 0.95, "Gamma": 0.05, "Rate_Beta": -0.5, "Hedge_Type": "UH"},
+        {"Fund_ID": "F02", "Name": "글로벌 테크 펀드", "Current_AUM": 3000, "Fee_Rate(%)": 0.50, "Delta": 1.20, "Gamma": 0.10, "Rate_Beta": -0.2, "Hedge_Type": "H"},
+        {"Fund_ID": "F03", "Name": "ESG 배당 펀드", "Current_AUM": 2000, "Fee_Rate(%)": 0.30, "Delta": 0.80, "Gamma": 0.02, "Rate_Beta": -0.8, "Hedge_Type": "UH"},
+    ]
+    fixed_costs = 5.0 # 운용사 고정비용 (단위: 억 원)
+    return pd.DataFrame(data), fixed_costs
