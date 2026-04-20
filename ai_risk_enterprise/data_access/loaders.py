@@ -1,15 +1,13 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 from datetime import datetime, timedelta
 
-def get_market_data(days=30):
-    """[미래: Market Data DB에서 시계열 데이터를 가져오는 역할]"""
+def generate_daily_risk_factors(days=30):
     np.random.seed(42)
     dates = [datetime.now().date() - timedelta(days=x) for x in range(days)]
     dates.reverse()
     data = {'Date': dates}
 
-    # KTB, Corp, KOSPI 등 가상 데이터 생성 (기존 로직 동일)
     data['KTB_6M'] = np.linspace(3.20, 3.45, days) + np.random.normal(0, 0.03, days)
     data['KTB_1Y'] = np.linspace(3.25, 3.55, days) + np.random.normal(0, 0.04, days)
     data['KTB_3Y'] = np.linspace(3.30, 3.70, days) + np.random.normal(0, 0.05, days)
@@ -34,8 +32,7 @@ def get_market_data(days=30):
 
     return pd.DataFrame(data)
 
-def get_sell_side_portfolio():
-    """[미래: Position DB에서 증권사 보유 채권/ELS 원장 데이터를 가져오는 역할]"""
+def get_bond_portfolio():
     bond_portfolio = [
         {"bond_id": "B01", "name": "국고채_6개월_A", "tenor": 0.5, "curve": "KTB_6M", "face_value": 10000, "qty": 1000},
         {"bond_id": "B02", "name": "국고채_1년_A", "tenor": 1.0, "curve": "KTB_1Y", "face_value": 10000, "qty": 1500},
@@ -48,7 +45,9 @@ def get_sell_side_portfolio():
         {"bond_id": "B09", "name": "회사채_6개월_B", "tenor": 0.5, "curve": "Corp_6M", "face_value": 10000, "qty": 5000},
         {"bond_id": "B10", "name": "회사채_1년_B", "tenor": 1.0, "curve": "Corp_1Y", "face_value": 10000, "qty": 2000},
     ]
-    
+    return pd.DataFrame(bond_portfolio)
+
+def get_els_portfolio():
     els_portfolio = [
         {"els_id": "E01", "name": "ELS_KOSPI_SAMSUNG_KI50", "asset1": "KOSPI200_Close", "asset2": "Samsung_Close", "ki_barrier": 50, "qty": 1000},
         {"els_id": "E02", "name": "ELS_KOSPI_HYNIX_KI55", "asset1": "KOSPI200_Close", "asset2": "SKHynix_Close", "ki_barrier": 55, "qty": 1200},
@@ -61,17 +60,4 @@ def get_sell_side_portfolio():
         {"els_id": "E09", "name": "ELS_HYNIX_NAVER_KI70", "asset1": "SKHynix_Close", "asset2": "Naver_Close", "ki_barrier": 70, "qty": 3000},
         {"els_id": "E10", "name": "ELS_KOSPI_NAVER_KI70", "asset1": "KOSPI200_Close", "asset2": "Naver_Close", "ki_barrier": 70, "qty": 2500},
     ]
-    return pd.DataFrame(bond_portfolio), pd.DataFrame(els_portfolio)
-
-def get_buy_side_funds():
-    """[미래: Fund DB에서 자산운용사 펀드 정보를 가져오는 역할]"""
-    fund_data = {
-        'Fund_Name': ['KOSPI 200 인덱스 펀드', 'TIGER 나스닥100 (UH)', 'TIGER 나스닥100 (H)', 'TIGER 미국테크 커버드콜', '글로벌 상업용 부동산 펀드'],
-        'Current_AUM': [50000, 80000, 60000, 40000, 70000],
-        'Fee_Rate(%)': [0.15, 0.50, 0.50, 0.70, 1.50],
-        'Hedge_Type':  ['None', 'UH', 'H', 'UH', 'H'],
-        'Delta':       [1.0, 1.0, 1.0, 0.6, 0.0],
-        'Gamma':       [0.0, 0.0, 0.0, -1.2, 0.0],
-        'Rate_Beta':   [0.0, 0.0, 0.0, 0.0, -6.0]
-    }
-    return pd.DataFrame(fund_data).set_index('Fund_Name'), 800 # df_base와 fixed_costs 반환
+    return pd.DataFrame(els_portfolio)
