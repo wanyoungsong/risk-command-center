@@ -262,17 +262,22 @@ with col_viz:
 
     elif "2-2" in selected_mode:
         step = st.session_state[curr_step_key]
-        if step == 0: st.info("👈 좌측 대화창에 목표 손실액을 지시해 주십시오.")
+        if step == 0: 
+            st.info("👈 좌측 대화창에 도달하고자 하는 목표 손실액을 지시해 주십시오.")
         elif step == 1:
-            st.subheader("◀ 역방향: 위기 좌표 탐색 (RST)")
+            st.subheader("◀ 역방향: 위기 좌표 탐색 (Reverse Stress Test)")
             col_r1, col_r2 = st.columns(2)
             radar_ph, contour_ph = col_r1.empty(), col_r2.empty()
-            df_bonds_scaled = df_bonds.copy(); df_bonds_scaled['qty'] *= 100
+            
+            df_bonds_scaled = df_bonds.copy()
+            df_bonds_scaled['qty'] *= 100
             
             def eval_pnl(k, s, r):
                 mkt = base_mkt_state.copy()
-                mkt['KOSPI200_Close'] *= (k / 100.0); mkt['Samsung_Close'] *= (s / 100.0)
-                for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']: mkt[tenor] += (r / 100.0)
+                mkt['KOSPI200_Close'] *= (k / 100.0)
+                mkt['Samsung_Close'] *= (s / 100.0)
+                for tenor in ['KTB_6M', 'KTB_1Y', 'KTB_3Y', 'KTB_5Y', 'Corp_6M', 'Corp_1Y']: 
+                    mkt[tenor] += (r / 100.0)
                 tb = revalue_bonds_multi(df_bonds_scaled, mkt, base_mkt_state)
                 te = revalue_els_multi(df_els, mkt, base_mkt_state)
                 return tb['pnl'].sum() + te['pnl'].sum()
@@ -281,34 +286,82 @@ with col_viz:
             ck, cs, cr = 100.0, 100.0, 0.0
             pk, ps, pr = [100.0], [100.0], [0.0]
             
-            with st.spinner("최적화 엔진 역탐색 중..."):
+            with st.spinner("최적화 알고리즘 역탐색 중..."):
                 for _ in range(40):
                     curr_pnl = eval_pnl(ck, cs, cr)
                     if curr_pnl <= target_pnl_raw: break
-                    gk = max(0, curr_pnl - eval_pnl(ck - 1.0, cs, cr)) + 1.0
-                    gs = max(0, curr_pnl - eval_pnl(ck, cs - 1.0, cr)) + 1.5
-                    gr = max(0, curr_pnl - eval_pnl(ck, cs, cr + 1.0)) + 2.0
-                    total_g = gk + gs + gr
-                    ck = max(10.0, ck - (gk/total_g)*2.0); cs = max(10.0, cs - (gs/total_g)*2.0); cr += (gr/total_g)*5.0
-                    pk.append(ck); ps.append(cs); pr.append(cr)
+                    
+                    # Gradient(기울기) 계산 시 금리의 스케일을 주가와 맞춤
+                    gk = max(0, curr_pnl - eval_pnl(ck - 1.0, cs, cr))
+                    gs = max(0, curr_pnl - eval_pnl(ck, cs - 1.0, cr))
+                    gr = max(0, curr_pnl - eval_pnl(ck, cs, cr + 10.0))
+                    
+                    total_g = gk + gs + gr + 1e-5
+                    
+                    # 편식 방지: 주가와 금리가 골고루 움직이도록 강제 스텝(-0.5, +2.0) 부여
+                    ck = max(10.0, ck - (gk / total_g) * 3.0 - 0.5)
+                    cs = max(10.0, cs - (gs / total_g) * 3.0 - 0.5)
+                    cr += (gr / total_g) * 10.0 + 2.0
+                    
+                    pk.append(ck)
+                    ps.append(cs)
+                    pr.append(cr)
             
             idx = np.linspace(0, len(pk)-1, 10).astype(int)
             k_path, s_path, r_path = [pk[i] for i in idx], [ps[i] for i in idx], [pr[i] for i in idx]
             
+            # 등고선(Contour) 차트 베이스
+            k_grid, s_grid = np.linspace(50, 100, 10), np.linspace(50, 100, 10)
+            K_MESH, S_MESH = np.meshgrid(k_grid, s_grid)
+            history_data = []
+            
             for s in range(10):
                 ck, cs, cr = k_path[s], s_path[s], r_path[s]
-                fig_radar = go.Figure(data=go.Scatterpolar(r=[(100-ck)*2, (100-cs)*2, cr/1.5, (100-ck)*2], theta=['KOSPI 하락', '삼성전자 하락', '금리 상승', 'KOSPI 하락'], fill='toself', line=dict(color='red', width=2)))
+                
+                # 1. 레이더 차트 스케일 정상화 (40% 하락 시 100, 300bp 상승 시 100으로 정규화)
+                r_vals = [
+                    min(100, max(0, (100 - ck) * 2.5)), 
+                    min(100, max(0, (100 - cs) * 2.5)), 
+                    min(100, max(0, cr / 3.0)), 
+                    min(100, max(0, (100 - ck) * 2.5))
+                ]
+                
+                fig_radar = go.Figure(data=go.Scatterpolar(
+                    r=r_vals, theta=['KOSPI 하락', '삼성전자 하락', '금리 상승', 'KOSPI 하락'], 
+                    fill='toself', line=dict(color='red', width=2)
+                ))
                 fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), showlegend=False, height=350, margin=dict(l=30,r=30,t=30,b=30))
                 radar_ph.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{s}")
                 
-                fig_contour = go.Figure(data=go.Contour(z=[[0,1],[1,2]], x=[ck-10, 100], y=[cs-10, 100], colorscale='RdBu'))
-                fig_contour.add_trace(go.Scatter(x=k_path[:s+1], y=s_path[:s+1], mode='lines+markers', line=dict(color='#00FF00', width=4)))
+                # 2. 등고선 차트 복구
+                fig_contour = go.Figure(data=go.Contour(z=(K_MESH+S_MESH), x=k_grid, y=s_grid, colorscale='RdBu'))
+                fig_contour.add_trace(go.Scatter(x=k_path[:s+1], y=s_path[:s+1], mode='lines+markers', line=dict(color='#00FF00', width=4), marker=dict(size=8, color='black')))
                 fig_contour.update_layout(height=350, margin=dict(l=30,r=30,t=30,b=30), showlegend=False)
                 contour_ph.plotly_chart(fig_contour, use_container_width=True, key=f"contour_{s}")
+                
+                history_data.append({"Step": s+1, "KOSPI": f"{ck:.1f}%", "삼성전자": f"{cs:.1f}%", "금리": f"+{cr:.0f}bp"})
                 time.sleep(0.3)
 
-            st.session_state.rst_final_factors = (ck, cs, cr); st.session_state[curr_step_key] = 2; st.rerun()
+            # [중요] 애니메이션 종료 시 차트 객체를 저장하고 Step 2로 이동
+            st.session_state.rst_radar = fig_radar
+            st.session_state.rst_contour = fig_contour
+            st.session_state.rst_history = history_data
+            st.session_state.rst_final_factors = (ck, cs, cr)
+            st.session_state[curr_step_key] = 2 
+            st.rerun()
+
         elif step >= 2:
             st.subheader("◀ 역방향: 위기 좌표 탐색 (종료)")
+            
+            # [중요] 사라졌던 차트를 화면에 다시 고정시키는 코드 복구!
             c1, c2 = st.columns(2)
-            c1.info(f"최종 좌표: KOSPI {st.session_state.rst_final_factors[0]:.1f}%, 삼성 {st.session_state.rst_final_factors[1]:.1f}%, 금리 +{st.session_state.rst_final_factors[2]:.0f}bp")
+            if 'rst_radar' in st.session_state:
+                c1.plotly_chart(st.session_state.rst_radar, use_container_width=True)
+            if 'rst_contour' in st.session_state:
+                c2.plotly_chart(st.session_state.rst_contour, use_container_width=True)
+            
+            st.info(f"🚨 최종 타격점 발견: KOSPI {st.session_state.rst_final_factors[0]:.1f}%, 삼성전자 {st.session_state.rst_final_factors[1]:.1f}%, 금리 +{st.session_state.rst_final_factors[2]:.0f}bp")
+            
+            st.markdown("#### 🔍 탐색 궤적 상세 데이터")
+            if 'rst_history' in st.session_state:
+                st.dataframe(pd.DataFrame(st.session_state.rst_history), use_container_width=True, hide_index=True)
