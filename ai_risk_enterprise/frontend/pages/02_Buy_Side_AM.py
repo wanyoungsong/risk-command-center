@@ -4,6 +4,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 
 # 우리가 만든 엔터프라이즈 모듈들 임포트
 from data_access.loaders import get_buy_side_funds
