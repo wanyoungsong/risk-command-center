@@ -70,3 +70,37 @@ def calculate_parametric_var(df_b, df_e, df_mkt, confidence_level=0.99):
     z_score = norm.ppf(confidence_level)
     var_amount = z_score * portfolio_std_dev
     return abs(var_amount), S
+
+def run_am_stress_test(df_base, fixed_costs, stock_shock, fx_shock, rate_shock):
+    """자산운용사(Buy-Side) 펀드런 및 영업이익 스트레스 테스트 엔진"""
+    df = df_base.copy()
+    
+    def calc_impact(row):
+        base_return = (row['Delta'] * stock_shock) + (0.5 * row['Gamma'] * (stock_shock ** 2)) + (row['Rate_Beta'] * rate_shock)
+        final_return = base_return
+        
+        if row['Hedge_Type'] == 'UH':
+            final_return = (1 + base_return) * (1 + fx_shock) - 1
+        elif row['Hedge_Type'] == 'H':
+            if fx_shock > 0.05:
+                # 유동성 발작(Liquidity Crunch) 프리미엄 적용
+                final_return -= ((fx_shock - 0.05) ** 1.5) * 5.0 
+        return final_return
+
+    df['Stress_Return'] = df.apply(calc_impact, axis=1)
+    # 수익률이 -10% 이하로 떨어지면 펀드런(대규모 환매) 발생 가정
+    df['Run_Rate'] = df['Stress_Return'].apply(lambda r: abs(r + 0.10) * 1.5 if r < -0.10 else 0.0)
+    
+    df['AUM_MTM'] = df['Current_AUM'] * (1 + df['Stress_Return'])
+    df['Outflow'] = df['AUM_MTM'] * df['Run_Rate']
+    df['Final_AUM'] = df['AUM_MTM'] - df['Outflow']
+    df['New_Rev'] = df['Final_AUM'] * (df['Fee_Rate(%)'] / 100)
+    
+    tot_curr_aum = df['Current_AUM'].sum()
+    tot_final_aum = df['Final_AUM'].sum()
+    tot_curr_rev = (df['Current_AUM'] * (df['Fee_Rate(%)'] / 100)).sum()
+    
+    curr_op = tot_curr_rev - fixed_costs
+    new_op = df['New_Rev'].sum() - fixed_costs
+    
+    return df, tot_curr_aum, tot_final_aum, curr_op, new_op
