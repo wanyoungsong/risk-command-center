@@ -12,7 +12,9 @@ def revalue_bonds_multi(df, current_mkt, base_mkt):
     results['old_price'] = results['face_value'] / ((1 + results['base_rate']) ** results['tenor'])
     results['new_price'] = results['face_value'] / ((1 + results['current_rate']) ** results['tenor'])
     results['price_change'] = results['new_price'] - results['old_price']
-    results['pnl'] = results['price_change'] * results['qty']
+    
+    # [수정] 수식은 그대로 두고, 1단위 당 1억 원의 명목금액(Notional) 승수만 추가
+    results['pnl'] = results['price_change'] * results['qty'] * 100000000
     return results
 
 def revalue_els_multi(df, current_mkt, base_mkt):
@@ -43,7 +45,9 @@ def revalue_els_multi(df, current_mkt, base_mkt):
     results['old_price'] = initial_pnl_per_unit 
     results['new_price'] = book_pnl_per_unit
     results['price_change'] = results['new_price'] - results['old_price']
-    results['pnl'] = results['price_change'] * results['qty']
+    
+    # [수정] 수식은 그대로 두고, 1단위 당 100만 원의 명목금액 승수만 추가 (ELS는 변동폭이 크므로)
+    results['pnl'] = results['price_change'] * results['qty'] * 1000000
     return results
 
 def calculate_parametric_var(df_b, df_e, df_mkt, confidence_level=0.99):
