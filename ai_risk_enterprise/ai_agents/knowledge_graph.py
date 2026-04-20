@@ -80,4 +80,15 @@ class KnowledgeGraphClient:
         elif dept_code == 'ELS_DESK': return "- **규정명**: ELS 비선형 한도 초과\n- **AI 조치 처방**: 롤오버 중지 및 베가 중립 헤지 기계적 확대"
         return "✅ 정상 범위"
 
+    def get_am_kg_context(self, stock_shock, fx_shock):
+        """자산운용사(Buy-Side) 충격 조건에 맞는 사내 규정 추출"""
+        if not self.uri or not self.password:
+            # DB 연결이 없을 때의 시연용 Fallback
+            if stock_shock <= -0.10 and fx_shock >= 0.05:
+                return "- **적용 규정**: 환율 급등 및 주가 폭락에 따른 마진콜 대비 지침\n- **대응 조치**: 달러 유동성 즉각 확보 및 언헤지 펀드 환헤지 비율 조정 요망"
+            return "- **적용 규정**: 펀드런 위기 관리 모니터링\n- **대응 조치**: 영업이익 적자 전환 여부 주시 및 주요 기관 고객 이탈 방어"
+        
+        # (실제 DB 연동 로직이 들어갈 자리 - 시연을 위해 Fallback 우선 반환)
+        return "- **적용 규정**: 펀드런 위기 관리\n- **대응 조치**: 포트폴리오 유동성 확보"
+        
 kg_client = KnowledgeGraphClient()
