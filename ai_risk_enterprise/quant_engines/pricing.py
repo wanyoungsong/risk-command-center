@@ -72,7 +72,7 @@ def calculate_parametric_var(df_b, df_e, df_mkt, confidence_level=0.99):
     return abs(var_amount), S
 
 def run_am_stress_test(df_base, fixed_costs, stock_shock, fx_shock, rate_shock):
-    """자산운용사(Buy-Side) 펀드런 및 영업이익 스트레스 테스트 엔진"""
+    """자산운용사 충격 엔진 (수익률, 펀드런, 영업이익 산출)"""
     df = df_base.copy()
     
     def calc_impact(row):
@@ -83,12 +83,12 @@ def run_am_stress_test(df_base, fixed_costs, stock_shock, fx_shock, rate_shock):
             final_return = (1 + base_return) * (1 + fx_shock) - 1
         elif row['Hedge_Type'] == 'H':
             if fx_shock > 0.05:
-                # 유동성 발작(Liquidity Crunch) 프리미엄 적용
+                # [수정] 단순 수식을 넘어선 실제 '유동성 발작(Liquidity Crunch)' 프리미엄 5배 적용!
+                # 환율이 튈 때 환헤지 롤오버 비용과 강제 청산 리스크를 비선형적으로 증폭시킴
                 final_return -= ((fx_shock - 0.05) ** 1.5) * 5.0 
         return final_return
 
     df['Stress_Return'] = df.apply(calc_impact, axis=1)
-    # 수익률이 -10% 이하로 떨어지면 펀드런(대규모 환매) 발생 가정
     df['Run_Rate'] = df['Stress_Return'].apply(lambda r: abs(r + 0.10) * 1.5 if r < -0.10 else 0.0)
     
     df['AUM_MTM'] = df['Current_AUM'] * (1 + df['Stress_Return'])
